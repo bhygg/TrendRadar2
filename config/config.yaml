@@ -1,121 +1,331 @@
+# ================= 专业产业内参监测系统 =================
+# 版本: 2.0 | 设计: 深度产业穿透 + 商业价值导向
+# 权重分配: 产业数据35% + 娱乐商机7% + 宏观环境58%
+
 app:
   version_check_url: "https://raw.githubusercontent.com/sansan0/TrendRadar/refs/heads/master/version"
-  show_version_update: true # 控制显示版本更新提示，如果 false，则不接受新版本提示
+  show_version_update: false
+  data_retention_days: 30
+  log_level: "INFO"
 
 crawler:
-  request_interval: 1000 # 请求间隔(毫秒)
-  enable_crawler: true # 是否启用爬取新闻功能，如果 false，则直接停止程序
-  use_proxy: false # 是否启用代理，false 时为关闭
+  request_interval: 1500  # 提高间隔避免被封
+  enable_crawler: true
+  use_proxy: false
   default_proxy: "http://127.0.0.1:10086"
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+  timeout: 30
+  retry_times: 3
 
-# 🔸 daily（当日汇总模式）
-#   • 推送时机：按时推送(默认每小时推送一次)
-#   • 显示内容：当日所有匹配新闻 + 新增新闻区域
-#   • 适用场景：日报总结、全面了解当日热点趋势
-#
-# 🔸 current（当前榜单模式）
-#   • 推送时机：按时推送(默认每小时推送一次)
-#   • 显示内容：当前榜单匹配新闻 + 新增新闻区域
-#   • 适用场景：实时热点追踪、了解当前最火的内容
-#
-# 🔸 incremental（增量监控模式）
-#   • 推送时机：有新增才推送
-#   • 显示内容：新出现的匹配频率词新闻
-#   • 适用场景：避免重复信息干扰
-
-# 推送模式选择
+# 🔍 智能监测模式
 report:
-  mode: "daily" # 可选: "daily"|"incremental"|"current"
-  rank_threshold: 5 # 排名高亮阈值
-  sort_by_position_first: false # 排序优先级：true=先按配置位置排序，false=先按热点条数排序
-  max_news_per_keyword: 0 # 每个关键词最大显示数量，0=不限制
+  mode: "daily"  # 日报模式
+  rank_threshold: 3  # 降低阈值，专注核心信息
+  sort_by_position_first: true  # 按产业层级排序
+  max_news_per_keyword: 5  # 避免信息过载
+  min_industry_depth: 2  # 最小产业链穿透层级
+  
+  # 日报生成配置
+  daily_report:
+    generate_time: "08:00"  # 北京时间8点生成
+    include_trend_analysis: true
+    include_risk_warning: true
+    include_opportunity_spotting: true
+    format: "markdown"  # 输出格式
 
-notification:
-  enable_notification: true # 是否启用通知功能，如果 false，则不发送手机通知
-  message_batch_size: 4000 # 消息分批大小（字节）(这个配置别动)
-  dingtalk_batch_size: 20000 # 钉钉消息分批大小（字节）(这个配置也别动)
-  feishu_batch_size: 30000 # 飞书消息分批大小（字节）
-  bark_batch_size: 4000 # Bark消息分批大小（字节）
-  slack_batch_size: 4000 # Slack消息分批大小（字节）
-  batch_send_interval: 3 # 批次发送间隔（秒）
-  feishu_message_separator: "━━━━━━━━━━━━━━━━━━━" # feishu 消息分割线
-
-  # 🕐 推送时间窗口控制（可选功能）
-  # 用途：限制推送的时间范围，避免非工作时间打扰
-  # 适用场景：
-  #   - 只想在工作日白天接收推送（如 09:00-18:00）
-  #   - 希望在晚上固定时间收到汇总（如 20:00-22:00）
-  push_window:
-    enabled: false  # 是否启用推送时间窗口控制，默认关闭
-    # 注意：GitHub Actions 执行时间不稳定，时间范围建议至少留足 2 小时
-    # 如果想要精准的定时推送，建议使用 Docker 部署在个人服务器上
-    time_range:
-      start: "20:00"  # 推送时间窗口开始（北京时间）
-      end: "22:00"    # 推送时间窗口结束（北京时间）
-    once_per_day: true  # 每天在时间窗口内只推送一次，如果 false，则窗口内每次执行都推送
-    push_record_retention_days: 7  # 推送记录保留天数
-
-  # ⚠️⚠️⚠️ 重要安全警告 / IMPORTANT SECURITY WARNING ⚠️⚠️⚠️
-  #
-  # 🔴 请务必妥善保管好 webhooks，不要公开!!!
-  # 🔴 如果你以 fork 的方式将本项目部署在 GitHub 上，请勿在下面填写任何 webhooks
-  # 🔴 而是将 webhooks 填入 GitHub Secret（Settings → Secrets and variables → Actions）
-  # 🔴 否则：
-  #    - 轻则：手机上收到大量垃圾广告推送
-  #    - 重则：webhook 被滥用造成严重安全隐患（如恶意消息轰炸、钓鱼链接等）
-  #
-  # 🔴 NEVER expose webhooks publicly!!!
-  # 🔴 If deploying via GitHub fork, DO NOT fill webhooks below
-  # 🔴 Instead, add them to GitHub Secrets (Settings → Secrets and variables → Actions)
-  # 🔴 Consequences of exposure:
-  #    - Minor: Spam notifications flooding your devices
-  #    - Severe: Webhook abuse leading to security incidents (malicious messages, phishing links, etc.)
-  #
-  webhooks:
-    feishu_url: "" # 飞书机器人的 webhook URL
-    dingtalk_url: "" # 钉钉机器人的 webhook URL
-    wework_url: "" # 企业微信机器人的 webhook URL
-    wework_msg_type: "markdown" # 企业微信消息类型：markdown(群机器人) 或 text(个人微信应用)
-    telegram_bot_token: "" # Telegram Bot Token
-    telegram_chat_id: "" # Telegram Chat ID
-    email_from: "" # 发件人邮箱地址
-    email_password: "" # 发件人邮箱密码或授权码
-    email_to: "" # 收件人邮箱地址，多个收件人用逗号分隔
-    email_smtp_server: "" # SMTP服务器地址（可选，留空自动识别）
-    email_smtp_port: "" # SMTP端口（可选，留空自动识别）
-    ntfy_server_url: "https://ntfy.sh" # ntfy服务器地址，默认使用公共服务，可改为自托管地址
-    ntfy_topic: "" # ntfy主题名称
-    ntfy_token: "" # ntfy访问令牌（可选，用于私有主题）
-    bark_url: "" # Bark推送URL（格式：https://api.day.app/your_device_key 或自建服务器地址）
-    slack_webhook_url: "" # Slack Incoming Webhook URL（格式：https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX）
-
-# 用于让关注度更高的新闻在更前面显示，即用算法重新组合不同平台的热搜排序形成你侧重的热搜，合起来是 1 就行
+# 📊 智能权重系统
 weight:
-  rank_weight: 0.6 # 排名权重
-  frequency_weight: 0.3 # 频次权重
-  hotness_weight: 0.1 # 热度权重
+  rank_weight: 0.35
+  frequency_weight: 0.45  # 增加频次权重，强调持续关注
+  hotness_weight: 0.20
+  industry_boost: 1.5  # 产业数据权重提升
+  entertainment_discount: 0.7  # 娱乐内容权重折扣
+  
+  # 时间衰减因子
+  time_decay:
+    enabled: true
+    half_life_hours: 6  # 半衰期6小时
+    decay_rate: 0.85
 
-# name 可以定义任意名称，只具有显示作用，即使项目运行了几天后，忽然改掉 name 也不会影响代码的正常运行
+# 📢 通知系统
+notification:
+  enable_notification: true
+  message_batch_size: 5000
+  feishu_batch_size: 30000
+  batch_send_interval: 3
+  feishu_message_separator: "━━━━━━━━━━━━━━━━━━━"
+  
+  # 飞书消息模板配置
+  feishu_template:
+    title: "📊 产业内参日报 {{date}}"
+    header_color: "blue"
+    enable_footer: true
+    footer_text: "🔍 监测时间: {{timestamp}} | 数据源: {{sources_count}}个平台"
+  
+  # 推送时间窗口
+  push_window:
+    enabled: true
+    time_range:
+      start: "08:00"  # 北京时间8点
+      end: "09:00"
+    once_per_day: true
+    push_record_retention_days: 7
+  
+  # 多渠道通知配置（只启用飞书）
+  webhooks:
+    feishu_url: ""  # 通过GitHub Secrets设置
+    dingtalk_url: ""
+    wework_url: ""
+    telegram_bot_token: ""
+    telegram_chat_id: ""
+    email_from: ""
+    email_password: ""
+    email_to: ""
+    email_smtp_server: ""
+    email_smtp_port: ""
+    ntfy_server_url: "https://ntfy.sh"
+    ntfy_topic: ""
+    ntfy_token: ""
+    bark_url: ""
+    slack_webhook_url: ""
+
+# 📈 监测平台配置（使用可用的平台）
 platforms:
-  - id: "toutiao"
-    name: "今日头条"
-  - id: "baidu"
-    name: "百度热搜"
+  # === 财经投资类 ===（产业数据主要来源，权重最高）
   - id: "wallstreetcn-hot"
-    name: "华尔街见闻"
-  - id: "thepaper"
-    name: "澎湃新闻"
-  - id: "bilibili-hot-search"
-    name: "bilibili 热搜"
+    name: "华尔街见闻 最热"
+    weight: 1.5  # 最高权重
+    enabled: true
+    
   - id: "cls-hot"
     name: "财联社热门"
+    weight: 1.5
+    enabled: true
+    
+  - id: "gelonghui"
+    name: "格隆汇"
+    weight: 1.4
+    enabled: true
+    
+  - id: "xueqiu"
+    name: "雪球"
+    weight: 1.3
+    enabled: true
+    
+  - id: "jin10"
+    name: "金十数据"
+    weight: 1.4
+    enabled: true
+    
+  - id: "fastbull"
+    name: "快讯通"
+    weight: 1.3
+    enabled: true
+    
+  - id: "cls-telegraph"
+    name: "财联社 电报"
+    weight: 1.5
+    enabled: true
+    
+  - id: "cls-depth"
+    name: "财联社 深度"
+    weight: 1.4
+    enabled: true
+    
+  - id: "fastbull-express"
+    name: "法布财经 快讯"
+    weight: 1.3
+    enabled: true
+    
+  - id: "fastbull-news"
+    name: "法布财经 头条"
+    weight: 1.3
+    enabled: true
+
+  # === 综合新闻媒体类 ===（宏观环境主要来源）
+  - id: "thepaper"
+    name: "澎湃新闻"
+    weight: 1.2
+    enabled: true
+    
   - id: "ifeng"
     name: "凤凰网"
-  - id: "tieba"
-    name: "贴吧"
+    weight: 1.1
+    enabled: true
+    
+  - id: "cankaoxiaoxi"
+    name: "参考消息"
+    weight: 1.2
+    enabled: true
+    
+  - id: "zaobao"
+    name: "联合早报"
+    weight: 1.1
+    enabled: true
+    
+  - id: "mktnews"
+    name: "MKT新闻"
+    weight: 1.0
+    enabled: true
+    
+  - id: "kaopu"
+    name: "靠谱新闻"
+    weight: 1.0
+    enabled: true
+    
+  - id: "tencent-hot"
+    name: "腾讯新闻 综合早报"
+    weight: 1.0
+    enabled: true
+
+  # === 科技类平台 ===（产业数据来源）
+  - id: "ithome"
+    name: "IT之家"
+    weight: 1.3
+    enabled: true
+    
+  - id: "solidot"
+    name: "Solidot"
+    weight: 1.2
+    enabled: true
+    
+  - id: "sspai"
+    name: "少数派"
+    weight: 1.0
+    enabled: true
+
+  # === 社交/短视频/娱乐类 ===（严格控制，用于娱乐商机）
   - id: "weibo"
     name: "微博"
-  - id: "douyin"
-    name: "抖音"
+    weight: 0.8
+    enabled: true
+    filter_entertainment: true  # 启用娱乐过滤
+    
   - id: "zhihu"
     name: "知乎"
+    weight: 1.0  # 知乎有较多专业讨论
+    enabled: true
+    
+  - id: "bilibili-hot-search"
+    name: "bilibili 热搜"
+    weight: 0.7
+    enabled: true
+    filter_entertainment: true
+    
+  - id: "douyin"
+    name: "抖音"
+    weight: 0.6
+    enabled: true
+    filter_entertainment: true
+
+  # === 其他/工具类 ===
+  - id: "chongbuluo"
+    name: "虫部落"
+    weight: 1.0
+    enabled: true
+
+  # 暂时不启用的平台
+  - id: "sputniknewscn"
+    name: "卫星通讯社"
+    weight: 1.0
+    enabled: false
+    
+  - id: "tieba"
+    name: "贴吧"
+    weight: 0.6
+    enabled: false
+    
+  - id: "hupu"
+    name: "虎扑"
+    weight: 0.6
+    enabled: false
+    
+  - id: "juejin"
+    name: "掘金"
+    weight: 1.0
+    enabled: false
+    
+  - id: "github"
+    name: "GitHub"
+    weight: 1.0
+    enabled: false
+    
+  - id: "hackernews"
+    name: "Hacker News"
+    weight: 1.0
+    enabled: false
+    
+  - id: "v2ex"
+    name: "V2EX"
+    weight: 1.0
+    enabled: false
+    
+  - id: "nowcoder"
+    name: "牛客网"
+    weight: 1.0
+    enabled: false
+    
+  - id: "pcbeta"
+    name: "远景论坛"
+    weight: 1.0
+    enabled: false
+    
+  - id: "producthunt"
+    name: "ProductHunt"
+    weight: 1.0
+    enabled: false
+
+# 📊 数据存储配置
+storage:
+  data_dir: "./data"
+  archive_dir: "./data/archive"
+  reports_dir: "./reports"
+  analysis_dir: "./reports/analysis"
+  
+  # 缓存配置
+  cache:
+    enabled: true
+    ttl_hours: 24
+    max_size_mb: 100
+
+# 🔧 高级功能
+features:
+  # 产业链分析
+  industry_chain:
+    enabled: true
+    max_depth: 4
+    min_confidence: 0.6
+    
+  # 趋势预测
+  trend_prediction:
+    enabled: true
+    model: "exponential_smoothing"
+    forecast_days: 3
+    
+  # 情感分析
+  sentiment_analysis:
+    enabled: true
+    provider: "local"
+    min_confidence: 0.7
+    
+  # 去重策略
+  deduplication:
+    enabled: true
+    method: "simhash"
+    threshold: 0.85
+    
+  # 质量过滤
+  quality_filter:
+    enabled: true
+    min_source_count: 2
+    min_word_count: 20
+    max_word_count: 500
+
+# 🎯 性能配置
+performance:
+  max_concurrent_requests: 3
+  request_delay_ms: 2000
+  timeout_ms: 30000
+  max_retries: 2
+  use_cache: true
+  compress_data: true
