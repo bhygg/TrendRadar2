@@ -1,119 +1,211 @@
-name: Hot News Crawler
+name: 🏭 专业产业内参监测系统
 on:
+  # 实时数据采集：每小时执行一次（UTC时间）
   schedule:
-    # ⚠️ 重要提示：我们使用的是 GitHub 官方提供的资源来进行的推送，而每个账号的资源是限额的
-    # 为了不被官方判定为滥用而面临封号的风险，不建议设置比半小时更短的执行间隔
-    #
-    # Cron 表达式示例（注意：GitHub Actions 使用 UTC 时间，北京时间需要减 8 小时）:
-    # - "0 * * * *"         # 每小时整点运行一次（实际有偏差）
-    # - "*/30 * * * *"      # 每 30 分钟执行一次
-    # - "*/30 0-14 * * *"   # 每天 UTC 0:00-14:00（北京时间 8:00-22:00），每 30 分钟运行一次
-    # - "0 0,6,12,18 * * *" # 每天 UTC 0:00,6:00,12:00,18:00（北京时间 8:00,14:00,20:00,次日2:00）
-    - cron: "0 * * * *"
+    - cron: "0 * * * *"  # 每小时整点
+  
+  # 日报生成：北京时间8点（对应UTC时间0点）
+    - cron: "0 0 * * *"  # 每天UTC时间0点
+  
+  # 手动触发
   workflow_dispatch:
+    inputs:
+      operation:
+        description: '选择操作类型'
+        required: true
+        default: 'collect'
+        type: choice
+        options:
+          - collect
+          - report
+          - test
 
 concurrency:
-  group: crawler-${{ github.ref_name }}
-  cancel-in-progress: true
+  group: industrial-intelligence-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
 
+env:
+  PYTHON_VERSION: '3.10'
+  TZ: 'Asia/Shanghai'
+
 jobs:
-  crawl:
+  # 任务1：实时数据采集（每小时）
+  data-collection:
+    if: github.event_name == 'schedule' || (github.event.inputs.operation == 'collect')
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 25
+    outputs:
+      data_file: ${{ steps.collect.outputs.data_file }}
+      timestamp: ${{ steps.timestamp.outputs.timestamp }}
     
     steps:
-      - name: Checkout repository
+      - name: 🛎️ 检出代码
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
           clean: true
           
-      - name: Set up Python
+      - name: ⚙️ 设置Python环境
         uses: actions/setup-python@v4
         with:
-          python-version: "3.10"
+          python-version: ${{ env.PYTHON_VERSION }}
           
-      - name: Install dependencies
+      - name: 📦 安装依赖
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           
-      - name: Verify required files
+      - name: 🔧 生成时间戳
+        id: timestamp
         run: |
-          echo "🔍 检查必需的配置文件..."
-          if [ ! -f config/config.yaml ]; then
-            echo "❌ 错误: config/config.yaml 文件不存在"
-            exit 1
-          fi
-          if [ ! -f config/frequency_words.txt ]; then
-            echo "❌ 错误: config/frequency_words.txt 文件不存在"
-            exit 1
-          fi
-          echo "✅ 配置文件检查通过"
+          echo "timestamp=$(TZ='Asia/Shanghai' date +'%Y%m%d_%H%M%S')" >> $GITHUB_OUTPUT
+          echo "date=$(TZ='Asia/Shanghai' date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
           
-      - name: Run crawler
-        env:
-          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          DINGTALK_WEBHOOK_URL: ${{ secrets.DINGTALK_WEBHOOK_URL }}
-          WEWORK_WEBHOOK_URL: ${{ secrets.WEWORK_WEBHOOK_URL }}
-          WEWORK_MSG_TYPE: ${{ secrets.WEWORK_MSG_TYPE }}
-          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
-          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-          EMAIL_TO: ${{ secrets.EMAIL_TO }}
-          EMAIL_SMTP_SERVER: ${{ secrets.EMAIL_SMTP_SERVER }}
-          EMAIL_SMTP_PORT: ${{ secrets.EMAIL_SMTP_PORT }}
-          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-          NTFY_SERVER_URL: ${{ secrets.NTFY_SERVER_URL }}
-          NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
-          BARK_URL: ${{ secrets.BARK_URL }}
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          GITHUB_ACTIONS: true
-        run: python main.py
-        
-      - name: Commit and push if changes
-        env:
-          BRANCH_NAME: ${{ github.event.repository.default_branch }}
+      - name: 🔍 配置检查
         run: |
-          git config --global user.name 'GitHub Actions'
+          echo "🔍 检查配置文件..."
+          [ -f config/config.yaml ] && echo "✅ config.yaml 存在" || exit 1
+          [ -f config/frequency_words.txt ] && echo "✅ frequency_words.txt 存在" || exit 1
+          
+      - name: 📡 数据采集
+        id: collect
+        env:
+          GITHUB_ACTIONS: true
+          ENABLE_NOTIFICATION: "false"
+          REPORT_MODE: "incremental"
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+        run: |
+          echo "🕐 开始采集数据..."
+          python main.py --mode=collect
+          
+          # 检查数据文件
+          if [ -f "data/latest_news.json" ]; then
+            echo "✅ 数据采集完成"
+            data_file="data/hourly/data_${{ steps.timestamp.outputs.timestamp }}.json"
+            mkdir -p data/hourly
+            cp data/latest_news.json "$data_file"
+            echo "data_file=$data_file" >> $GITHUB_OUTPUT
+          else
+            echo "❌ 数据文件未生成"
+            exit 1
+          fi
+          
+      - name: 💾 数据归档
+        run: |
+          mkdir -p data/archive/hourly
+          cp ${{ steps.collect.outputs.data_file }} data/archive/hourly/
+          
+      - name: 📝 提交数据更新
+        if: success()
+        run: |
+          git config --global user.name 'GitHub Actions Bot'
           git config --global user.email 'actions@github.com'
           
-          echo "🔄 Syncing with remote (branch: $BRANCH_NAME)..."
-          git fetch origin $BRANCH_NAME
+          git add data/hourly/ data/archive/hourly/
           
-          # 保存当前更改
-          git stash --include-untracked || echo "Nothing to stash"
-          
-          # 同步到远程最新
-          git reset --hard origin/$BRANCH_NAME
-          
-          # 恢复本次更改
-          git stash pop || echo "Nothing to pop"
-          
-          git add -A
-          
-          if git diff --quiet && git diff --staged --quiet; then
-            echo "📭 No changes to commit"
-            exit 0
+          if git diff --cached --quiet; then
+            echo "📭 无新数据需要提交"
+          else
+            git commit -m "📊 数据更新: ${{ steps.timestamp.outputs.timestamp }}"
+            
+            # 重试推送
+            for i in {1..3}; do
+              echo "尝试推送 ($i/3)..."
+              git pull --rebase && git push && break || sleep 10
+            done
           fi
           
-          echo "📝 Committing changes..."
-          TIMESTAMP=$(TZ=Asia/Shanghai date "+%Y-%m-%d %H:%M:%S")
-          git commit -m "Auto update by GitHub Actions at $TIMESTAMP"
+  # 任务2：日报生成（每天一次）
+  daily-report:
+    needs: data-collection
+    if: github.event_name == 'schedule' || (github.event.inputs.operation == 'report')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+      
+    steps:
+      - name: 🛎️ 检出代码
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
           
-          echo "⬆️ Pushing changes with retry..."
-          for i in {1..5}; do
-            git pull --rebase origin $BRANCH_NAME && git push origin $BRANCH_NAME && {
-              echo "✅ Successfully pushed on attempt $i"
-              exit 0
-            }
-            echo "⚠️ Attempt $i failed, waiting $((i*3)) seconds..."
-            sleep $((i * 3))
-          done
+      - name: ⚙️ 设置Python环境
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
           
-          echo "❌ Failed to push after 5 attempts"
-          exit 1
+      - name: 📦 安装依赖
+        run: |
+          pip install -r requirements.txt
+          
+      - name: 📅 设置日期
+        id: date
+        run: |
+          target_date=$(TZ='Asia/Shanghai' date -d "yesterday" +'%Y-%m-%d')
+          echo "target_date=$target_date" >> $GITHUB_OUTPUT
+          
+      - name: 📊 生成产业内参日报
+        id: generate
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          REPORT_MODE: "daily"
+          ENABLE_NOTIFICATION: "true"
+        run: |
+          echo "📋 生成产业内参日报..."
+          
+          # 聚合前24小时数据
+          find data/hourly -name "*.json" -mtime -1 -exec cat {} + > data/daily_aggregated.json 2>/dev/null || true
+          
+          # 生成日报
+          echo "🔄 运行主程序生成日报..."
+          python main.py --mode=daily --input=data/daily_aggregated.json
+          
+          # 检查输出
+          if [ -f "data/daily_report.md" ]; then
+            echo "✅ 日报生成成功"
+            mkdir -p reports
+            cp data/daily_report.md "reports/daily_report_${{ steps.date.outputs.target_date }}.md"
+          else
+            echo "❌ 日报生成失败"
+            exit 1
+          fi
+          
+      - name: 📤 发送飞书通知
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+        run: |
+          echo "📨 发送飞书通知..."
+          
+          # 发送日报内容
+          if [ -f "reports/daily_report_${{ steps.date.outputs.target_date }}.md" ]; then
+            report_content=$(cat "reports/daily_report_${{ steps.date.outputs.target_date }}.md")
+            
+            # 使用主程序发送通知
+            python main.py --send-only --report-file="reports/daily_report_${{ steps.date.outputs.target_date }}.md"
+          fi
+          
+      - name: 📁 归档报告
+        run: |
+          mkdir -p reports/archive
+          cp "reports/daily_report_${{ steps.date.outputs.target_date }}.md" reports/archive/
+          
+      - name: 🗑️ 清理旧数据
+        run: |
+          find data/hourly -name "*.json" -mtime +7 -delete
+          find data/archive/hourly -name "*.json" -mtime +30 -delete
+          
+      - name: 📝 提交日报
+        run: |
+          git config --global user.name 'GitHub Actions Bot'
+          git config --global user.email 'actions@github.com'
+          
+          git add reports/
+          
+          if git diff --cached --quiet; then
+            echo "📭 无新报告需要提交"
+          else
+            git commit -m "📋 产业内参日报: ${{ steps.date.outputs.target_date }}"
+            git push
+          fi
