@@ -1,22 +1,26 @@
-name: 🏭 专业产业内参监测系统
+name: "专业产业内参监测系统"
+
 on:
+  # 定时触发
   schedule:
     - cron: "0 * * * *"  # 每小时整点
-    - cron: "0 0 * * *"  # 每天UTC时间0点
+    - cron: "0 0 * * *"   # 每天UTC时间0点
   
+  # 手动触发
   workflow_dispatch:
     inputs:
-      operation:
-        description: '操作类型'
+      mode:
+        description: '运行模式'
         required: false
-        default: 'collect'
+        default: 'test'
         type: choice
         options:
-          - collect
-          - report
+          - test
+          - daily
+          - incremental
 
 concurrency:
-  group: industrial-intelligence-${{ github.ref }}
+  group: crawler-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
@@ -27,175 +31,99 @@ env:
   TZ: 'Asia/Shanghai'
 
 jobs:
-  # 任务1：数据采集
-  collect:
-    if: github.event_name == 'schedule' || (github.event.inputs.operation == 'collect')
+  crawl:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     
     steps:
-      - name: 🛎️ 检出代码
+      - name: 检出代码
         uses: actions/checkout@v3
-        
-      - name: ⚙️ 设置Python环境
+        with:
+          fetch-depth: 0
+          
+      - name: 设置Python环境
         uses: actions/setup-python@v4
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           
-      - name: 📦 安装依赖
+      - name: 安装依赖
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           
-      - name: 🔧 生成时间戳
-        id: timestamp
+      - name: 验证配置文件
         run: |
-          echo "timestamp=$(TZ='Asia/Shanghai' date +'%Y%m%d_%H%M%S')" >> $GITHUB_OUTPUT
-          echo "date=$(TZ='Asia/Shanghai' date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+          echo "检查配置文件..."
+          if [ ! -f config/config.yaml ]; then
+            echo "错误: config/config.yaml 不存在"
+            exit 1
+          fi
+          if [ ! -f config/frequency_words.txt ]; then
+            echo "错误: config/frequency_words.txt 不存在"
+            exit 1
+          fi
+          echo "配置文件检查通过"
           
-      - name: 📡 采集数据
+      - name: 运行爬虫
         env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          REPORT_MODE: ${{ github.event.inputs.mode || 'test' }}
           GITHUB_ACTIONS: true
-          ENABLE_NOTIFICATION: "false"
-          REPORT_MODE: "incremental"
-          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
         run: |
-          echo "🕐 开始采集数据..."
-          python main.py
-          echo "✅ 数据采集完成"
+          echo "开始运行爬虫..."
+          echo "运行模式: $REPORT_MODE"
           
-      - name: 📁 处理输出文件
-        run: |
-          echo "📂 检查输出文件..."
-          
-          # 创建data目录
-          mkdir -p data/hourly
-          
-          # 查找最新的txt文件
-          latest_txt=$(find output -name "*.txt" -type f | head -1)
-          
-          if [ -n "$latest_txt" ]; then
-            echo "📄 找到txt文件: $latest_txt"
-            
-            # 将txt内容转换为简单的json格式
-            output_file="data/hourly/data_${{ steps.timestamp.outputs.timestamp }}.json"
-            
-            # 创建JSON数据
-            echo '{
-  "timestamp": "'$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')'",
-  "date": "'${{ steps.timestamp.outputs.date }}'",
-  "source_files": "'"$latest_txt"'",
-  "count": '$(wc -l < "$latest_txt" 2>/dev/null || echo 0)',
-  "news": []' > "$output_file"
-            
-            # 创建latest_news.json链接
-            cp "$output_file" data/latest_news.json
-            
-            echo "✅ JSON文件已创建: $output_file"
+          # 设置环境变量
+          if [ "$REPORT_MODE" = "test" ]; then
+            export ENABLE_NOTIFICATION="true"
+            export REPORT_MODE="daily"
+          elif [ "$REPORT_MODE" = "daily" ]; then
+            export ENABLE_NOTIFICATION="true"
+            export REPORT_MODE="daily"
           else
-            echo "⚠️ 未找到txt文件，创建空JSON文件"
-            
-            output_file="data/hourly/data_${{ steps.timestamp.outputs.timestamp }}.json"
-            echo '{
-  "timestamp": "'$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')'",
-  "date": "'${{ steps.timestamp.outputs.date }}'",
-  "count": 0,
-  "news": []
-}' > "$output_file"
-            
-            cp "$output_file" data/latest_news.json
+            export ENABLE_NOTIFICATION="false"
+            export REPORT_MODE="incremental"
           fi
           
-      - name: 📝 提交数据
+          # 运行主程序
+          python main.py
+          
+          echo "爬虫运行完成"
+          
+      - name: 检查输出
+        run: |
+          echo "检查输出文件..."
+          if [ -d "output" ]; then
+            echo "输出目录存在"
+            find output -type f | head -10
+          else
+            echo "警告: output目录不存在"
+          fi
+          
+      - name: 提交数据
         if: success()
         run: |
           git config --global user.name 'GitHub Actions Bot'
           git config --global user.email 'actions@github.com'
           
-          git add data/
+          # 添加所有更改
+          git add -A
           
           if git diff --cached --quiet; then
-            echo "📭 无新数据需要提交"
+            echo "没有更改需要提交"
           else
-            git commit -m "📊 数据更新: ${{ steps.timestamp.outputs.timestamp }}"
+            TIMESTAMP=$(TZ=Asia/Shanghai date "+%Y-%m-%d %H:%M:%S")
+            git commit -m "自动更新: $TIMESTAMP"
             
+            # 重试推送
             for i in {1..3}; do
-              git pull --rebase && git push && {
-                echo "✅ 推送成功"
+              echo "尝试推送 ($i/3)..."
+              if git pull --rebase && git push; then
+                echo "推送成功"
                 break
-              } || {
-                echo "⚠️ 推送失败，等待10秒后重试..."
+              else
+                echo "推送失败，等待10秒..."
                 sleep 10
-              }
+              fi
             done
-          fi
-  
-  # 任务2：日报生成
-  report:
-    needs: collect
-    if: github.event_name == 'schedule' || (github.event.inputs.operation == 'report')
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    
-    steps:
-      - name: 🛎️ 检出代码
-        uses: actions/checkout@v3
-        
-      - name: ⚙️ 设置Python环境
-        uses: actions/setup-python@v4
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          
-      - name: 📅 设置日期
-        id: date
-        run: |
-          target_date=$(TZ='Asia/Shanghai' date +'%Y-%m-%d')
-          echo "target_date=$target_date" >> $GITHUB_OUTPUT
-          
-      - name: 📋 生成日报
-        env:
-          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
-          ENABLE_NOTIFICATION: "true"
-          REPORT_MODE: "daily"
-        run: |
-          echo "📋 生成日报..."
-          python main.py
-          
-      - name: 📤 发送飞书通知
-        env:
-          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
-        run: |
-          echo "📨 发送飞书通知..."
-          
-          # 查找最新的HTML报告
-          latest_html=$(find output -name "*.html" -type f | head -1)
-          
-          if [ -n "$latest_html" ] && [ -n "$FEISHU_WEBHOOK_URL" ]; then
-            # 发送简单通知
-            message='{
-              "msg_type": "text",
-              "content": {
-                "text": "类型：webhook content.daily_report\n📊 产业内参日报 '${{ steps.date.outputs.target_date }}'\n\n✅ 日报已生成，请查看输出文件。\n\n生成时间: '$(TZ="Asia/Shanghai" date +"%Y-%m-%d %H:%M:%S")'"
-              }
-            }'
-            
-            curl -X POST \
-              -H "Content-Type: application/json" \
-              -d "$message" \
-              "$FEISHU_WEBHOOK_URL"
-          fi
-          
-      - name: 📝 提交报告
-        if: success()
-        run: |
-          git config --global user.name 'GitHub Actions Bot'
-          git config --global user.email 'actions@github.com'
-          
-          git add output/
-          
-          if git diff --cached --quiet; then
-            echo "📭 无新报告需要提交"
-          else
-            git commit -m "📋 日报生成: ${{ steps.date.outputs.target_date }}"
-            git push
           fi
