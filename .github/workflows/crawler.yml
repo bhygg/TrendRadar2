@@ -1,25 +1,19 @@
 name: 🏭 专业产业内参监测系统
 on:
-  # 实时数据采集：每小时执行一次（UTC时间）
   schedule:
     - cron: "0 * * * *"  # 每小时整点
-  
-  # 日报生成：北京时间8点（对应UTC时间0点）
     - cron: "0 0 * * *"  # 每天UTC时间0点
   
-  # 手动触发
   workflow_dispatch:
     inputs:
       operation:
-        description: '选择操作类型'
-        required: true
+        description: '操作类型'
+        required: false
         default: 'collect'
         type: choice
         options:
           - collect
           - report
-          - test
-          - full
 
 concurrency:
   group: industrial-intelligence-${{ github.ref }}
@@ -33,21 +27,16 @@ env:
   TZ: 'Asia/Shanghai'
 
 jobs:
-  # 任务1：数据采集与处理
-  crawl-and-process:
+  # 任务1：数据采集
+  collect:
+    if: github.event_name == 'schedule' || (github.event.inputs.operation == 'collect')
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    outputs:
-      has_data: ${{ steps.check_data.outputs.has_data }}
-      data_file: ${{ steps.check_data.outputs.data_file }}
     
     steps:
       - name: 🛎️ 检出代码
         uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
-          clean: true
-          
+        
       - name: ⚙️ 设置Python环境
         uses: actions/setup-python@v4
         with:
@@ -63,18 +52,8 @@ jobs:
         run: |
           echo "timestamp=$(TZ='Asia/Shanghai' date +'%Y%m%d_%H%M%S')" >> $GITHUB_OUTPUT
           echo "date=$(TZ='Asia/Shanghai' date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
-          echo "date_dir=$(TZ='Asia/Shanghai' date +'%Y年%m月%d日')" >> $GITHUB_OUTPUT
           
-      - name: 🔍 配置检查
-        run: |
-          echo "🔍 检查配置文件..."
-          ls -la config/
-          echo "📊 系统配置："
-          echo "- 时区: ${{ env.TZ }}"
-          echo "- 运行时间: ${{ steps.timestamp.outputs.timestamp }}"
-          
-      - name: 📡 运行数据采集
-        id: crawl
+      - name: 📡 采集数据
         env:
           GITHUB_ACTIONS: true
           ENABLE_NOTIFICATION: "false"
@@ -82,371 +61,141 @@ jobs:
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
         run: |
           echo "🕐 开始采集数据..."
+          python main.py
+          echo "✅ 数据采集完成"
           
-          # 检查main.py支持的参数
-          echo "📋 检查main.py参数..."
-          python main.py --help || true
-          
-          # 运行主程序（根据你的main.py实际参数）
-          echo "🚀 运行主程序..."
-          
-          # 方案1：如果main.py支持--mode参数
-          python main.py --mode=incremental --no-notification || python main.py
-          
-          # 检查输出文件
-          echo "📁 检查生成的文件..."
-          find . -name "*.json" -type f | head -10
-          find . -name "*.txt" -type f | head -10
-          find . -name "*.html" -type f | head -10
-          
-      - name: 📊 处理输出文件
-        id: process_output
+      - name: 📁 处理输出文件
         run: |
-          echo "🔄 处理输出文件..."
+          echo "📂 检查输出文件..."
           
-          # 检查main.py生成的目录结构
-          ls -la output/ || echo "output目录不存在"
-          
-          # 如果有output目录，查找最新生成的文件
-          if [ -d "output" ]; then
-            echo "📁 找到output目录，查找数据文件..."
-            
-            # 查找最新的txt文件（包含原始数据）
-            latest_txt=$(find output -name "*.txt" -type f -exec ls -t {} + | head -1)
-            
-            if [ -n "$latest_txt" ]; then
-              echo "✅ 找到最新数据文件: $latest_txt"
-              
-              # 创建data目录并复制文件
-              mkdir -p data/hourly
-              mkdir -p data/raw
-              
-              # 复制txt文件
-              cp "$latest_txt" "data/raw/news_${{ steps.timestamp.outputs.timestamp }}.txt"
-              
-              # 将txt转换为json格式（如果需要）
-              echo "🔄 转换数据格式..."
-              python -c "
-import json
-import sys
-
-# 读取txt文件
-file_path = 'data/raw/news_${{ steps.timestamp.outputs.timestamp }}.txt'
-output_path = 'data/hourly/news_${{ steps.timestamp.outputs.timestamp }}.json'
-
-try:
-    with open(file_path, 'r', encoding='utf-8') as f:
-        lines = f.readlines()
-    
-    # 解析txt格式
-    news_items = []
-    current_item = {}
-    
-    for line in lines:
-        line = line.strip()
-        if line.startswith('【'):
-            # 可能是新闻标题
-            if current_item:
-                news_items.append(current_item)
-            current_item = {'title': line, 'source': 'unknown'}
-        elif line and current_item:
-            # 可能是其他信息
-            if 'detail' not in current_item:
-                current_item['detail'] = line
-            else:
-                current_item['detail'] += ' ' + line
-    
-    if current_item:
-        news_items.append(current_item)
-    
-    # 保存为json
-    with open(output_path, 'w', encoding='utf-8') as f:
-        json.dump({
-            'timestamp': '${{ steps.timestamp.outputs.timestamp }}',
-            'date': '${{ steps.timestamp.outputs.date }}',
-            'count': len(news_items),
-            'news': news_items
-        }, f, ensure_ascii=False, indent=2)
-    
-    print(f'✅ 转换完成: {len(news_items)} 条新闻')
-    
-except Exception as e:
-    print(f'❌ 转换失败: {str(e)}')
-    # 创建一个空json文件
-    with open(output_path, 'w', encoding='utf-8') as f:
-        json.dump({
-            'timestamp': '${{ steps.timestamp.outputs.timestamp }}',
-            'date': '${{ steps.timestamp.outputs.date }}',
-            'count': 0,
-            'news': []
-        }, f, ensure_ascii=False, indent=2)
-              "
-              
-              # 确保json文件存在
-              if [ -f "data/hourly/news_${{ steps.timestamp.outputs.timestamp }}.json" ]; then
-                echo "data_file=data/hourly/news_${{ steps.timestamp.outputs.timestamp }}.json" >> $GITHUB_OUTPUT
-                echo "✅ JSON数据文件已创建"
-              else
-                echo "data_file=data/hourly/empty_${{ steps.timestamp.outputs.timestamp }}.json" >> $GITHUB_OUTPUT
-                echo "⚠️ 使用空JSON文件"
-              fi
-            else
-              echo "data_file=data/hourly/empty_${{ steps.timestamp.outputs.timestamp }}.json" >> $GITHUB_OUTPUT
-              echo "⚠️ 未找到数据文件，创建空文件"
-            fi
-          else
-            echo "data_file=data/hourly/empty_${{ steps.timestamp.outputs.timestamp }}.json" >> $GITHUB_OUTPUT
-            echo "⚠️ output目录不存在，创建空文件"
-          fi
-          
-          # 创建data目录（如果不存在）
+          # 创建data目录
           mkdir -p data/hourly
           
-      - name: 📋 检查数据文件
-        id: check_data
-        run: |
-          echo "🔍 检查数据文件..."
+          # 查找最新的txt文件
+          latest_txt=$(find output -name "*.txt" -type f | head -1)
           
-          # 确保data_file变量存在
-          data_file="${{ steps.process_output.outputs.data_file }}"
-          
-          if [ -z "$data_file" ]; then
-            data_file="data/hourly/news_${{ steps.timestamp.outputs.timestamp }}.json"
-          fi
-          
-          # 如果文件不存在，创建一个空文件
-          if [ ! -f "$data_file" ]; then
-            echo "⚠️ 数据文件不存在，创建空文件..."
-            mkdir -p data/hourly
-            echo '{"timestamp": "${{ steps.timestamp.outputs.timestamp }}", "date": "${{ steps.timestamp.outputs.date }}", "count": 0, "news": []}' > "$data_file"
-          fi
-          
-          # 检查文件内容
-          count=$(python -c "import json; f=open('$data_file'); data=json.load(f); print(data.get('count', 0)); f.close()")
-          echo "📊 数据统计: $count 条新闻"
-          
-          # 设置输出
-          if [ $count -gt 0 ]; then
-            echo "has_data=true" >> $GITHUB_OUTPUT
+          if [ -n "$latest_txt" ]; then
+            echo "📄 找到txt文件: $latest_txt"
+            
+            # 将txt内容转换为简单的json格式
+            output_file="data/hourly/data_${{ steps.timestamp.outputs.timestamp }}.json"
+            
+            # 创建JSON数据
+            echo '{
+  "timestamp": "'$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')'",
+  "date": "'${{ steps.timestamp.outputs.date }}'",
+  "source_files": "'"$latest_txt"'",
+  "count": '$(wc -l < "$latest_txt" 2>/dev/null || echo 0)',
+  "news": []' > "$output_file"
+            
+            # 创建latest_news.json链接
+            cp "$output_file" data/latest_news.json
+            
+            echo "✅ JSON文件已创建: $output_file"
           else
-            echo "has_data=false" >> $GITHUB_OUTPUT
+            echo "⚠️ 未找到txt文件，创建空JSON文件"
+            
+            output_file="data/hourly/data_${{ steps.timestamp.outputs.timestamp }}.json"
+            echo '{
+  "timestamp": "'$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')'",
+  "date": "'${{ steps.timestamp.outputs.date }}'",
+  "count": 0,
+  "news": []
+}' > "$output_file"
+            
+            cp "$output_file" data/latest_news.json
           fi
           
-          echo "data_file=$data_file" >> $GITHUB_OUTPUT
-          
-      - name: 💾 数据归档
-        if: steps.check_data.outputs.has_data == 'true'
-        run: |
-          echo "📁 归档数据..."
-          mkdir -p data/archive/hourly
-          cp "${{ steps.check_data.outputs.data_file }}" data/archive/hourly/
-          
-      - name: 📝 提交数据更新
-        if: always()
+      - name: 📝 提交数据
+        if: success()
         run: |
           git config --global user.name 'GitHub Actions Bot'
           git config --global user.email 'actions@github.com'
           
-          # 添加数据文件
-          git add data/hourly/ data/raw/
+          git add data/
           
           if git diff --cached --quiet; then
             echo "📭 无新数据需要提交"
           else
-            echo "📝 提交数据更新..."
             git commit -m "📊 数据更新: ${{ steps.timestamp.outputs.timestamp }}"
             
-            # 重试推送
             for i in {1..3}; do
-              echo "尝试推送 ($i/3)..."
-              if git pull --rebase origin main && git push origin main; then
+              git pull --rebase && git push && {
                 echo "✅ 推送成功"
                 break
-              else
+              } || {
                 echo "⚠️ 推送失败，等待10秒后重试..."
                 sleep 10
-              fi
+              }
             done
           fi
-          
-  # 任务2：日报生成（依赖数据采集）
-  daily-report:
-    needs: crawl-and-process
-    if: github.event_name == 'schedule' || (github.event.inputs.operation == 'report' || github.event.inputs.operation == 'full')
+  
+  # 任务2：日报生成
+  report:
+    needs: collect
+    if: github.event_name == 'schedule' || (github.event.inputs.operation == 'report')
     runs-on: ubuntu-latest
     timeout-minutes: 30
-      
+    
     steps:
       - name: 🛎️ 检出代码
         uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
-          
+        
       - name: ⚙️ 设置Python环境
         uses: actions/setup-python@v4
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           
-      - name: 📦 安装依赖
-        run: |
-          pip install -r requirements.txt
-          
       - name: 📅 设置日期
         id: date
         run: |
-          if [ -n "${{ github.event.inputs.date }}" ]; then
-            target_date="${{ github.event.inputs.date }}"
-          else
-            target_date=$(TZ='Asia/Shanghai' date -d "yesterday" +'%Y-%m-%d')
-          fi
+          target_date=$(TZ='Asia/Shanghai' date +'%Y-%m-%d')
           echo "target_date=$target_date" >> $GITHUB_OUTPUT
-          echo "📅 报告日期: $target_date"
-          
-      - name: 📊 准备数据
-        run: |
-          echo "🔄 准备日报数据..."
-          
-          # 检查是否有数据
-          if [ "${{ needs.crawl-and-process.outputs.has_data }}" = "true" ]; then
-            echo "✅ 有数据可用，使用采集的数据"
-            data_file="${{ needs.crawl-and-process.outputs.data_file }}"
-            cp "$data_file" data/daily_input.json
-          else
-            echo "⚠️ 无新数据，尝试使用现有数据"
-            
-            # 查找最近的数据文件
-            recent_file=$(find data/hourly -name "*.json" -type f -exec ls -t {} + | head -1)
-            if [ -n "$recent_file" ]; then
-              echo "📁 使用最近的文件: $recent_file"
-              cp "$recent_file" data/daily_input.json
-            else
-              echo "❌ 无数据可用，创建空文件"
-              echo '{"timestamp": "${{ steps.date.outputs.target_date }}", "count": 0, "news": []}' > data/daily_input.json
-            fi
-          fi
           
       - name: 📋 生成日报
-        id: generate_report
         env:
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
           ENABLE_NOTIFICATION: "true"
           REPORT_MODE: "daily"
         run: |
-          echo "📋 生成产业内参日报..."
-          
-          # 运行主程序生成日报
-          echo "🚀 运行日报生成..."
-          python main.py --mode=daily || python main.py
-          
-          # 检查生成的日报文件
-          if [ -f "data/daily_report.md" ]; then
-            echo "✅ 日报生成成功"
-            mkdir -p reports
-            cp data/daily_report.md "reports/daily_report_${{ steps.date.outputs.target_date }}.md"
-            
-            # 显示前几行
-            echo "📄 日报预览:"
-            head -20 "reports/daily_report_${{ steps.date.outputs.target_date }}.md"
-          else
-            # 检查是否有其他日报文件
-            echo "🔍 查找日报文件..."
-            find . -name "*report*.md" -o -name "*日报*.md" | head -5
-            
-            # 创建简单的日报
-            echo "📝 创建简单日报..."
-            mkdir -p reports
-            cat > "reports/daily_report_${{ steps.date.outputs.target_date }}.md" << EOF
-# 📊 产业内参日报 ${{ steps.date.outputs.target_date }}
-
-## 📈 数据统计
-- 监测时间: ${{ steps.date.outputs.target_date }}
-- 数据来源: GitHub Actions 自动采集
-- 新闻数量: $(python -c "import json; f=open('data/daily_input.json'); data=json.load(f); print(data.get('count', 0)); f.close()")
-
-## 🔍 系统状态
-- 数据采集: ${{ needs.crawl-and-process.outputs.has_data }}
-- 生成时间: $(date '+%Y-%m-%d %H:%M:%S')
-
-## 📌 提示
-当前为测试模式，详细数据正在开发中。
-
-EOF
-          fi
+          echo "📋 生成日报..."
+          python main.py
           
       - name: 📤 发送飞书通知
-        if: success()
         env:
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
         run: |
           echo "📨 发送飞书通知..."
           
-          report_file="reports/daily_report_${{ steps.date.outputs.target_date }}.md"
-          if [ -f "$report_file" ]; then
-            # 读取日报内容
-            report_content=$(cat "$report_file")
+          # 查找最新的HTML报告
+          latest_html=$(find output -name "*.html" -type f | head -1)
+          
+          if [ -n "$latest_html" ] && [ -n "$FEISHU_WEBHOOK_URL" ]; then
+            # 发送简单通知
+            message='{
+              "msg_type": "text",
+              "content": {
+                "text": "类型：webhook content.daily_report\n📊 产业内参日报 '${{ steps.date.outputs.target_date }}'\n\n✅ 日报已生成，请查看输出文件。\n\n生成时间: '$(TZ="Asia/Shanghai" date +"%Y-%m-%d %H:%M:%S")'"
+              }
+            }'
             
-            # 构造简单的飞书消息
-            message=$(cat << EOF
-{
-  "msg_type": "text",
-  "content": {
-    "text": "类型：webhook content.daily_report\n📊 产业内参日报 ${{ steps.date.outputs.target_date }}\n\n$(echo "$report_content" | head -30 | sed 's/"/\\"/g')\n\n...完整报告请查看附件"
-  }
-}
-EOF
-            )
-            
-            # 发送飞书消息
-            echo "🔄 发送消息..."
-            curl -X POST -H "Content-Type: application/json" \
+            curl -X POST \
+              -H "Content-Type: application/json" \
               -d "$message" \
               "$FEISHU_WEBHOOK_URL"
-            
-            echo "✅ 飞书通知发送完成"
-          else
-            echo "❌ 日报文件不存在，跳过发送"
           fi
           
-      - name: 📁 归档报告
-        run: |
-          echo "📁 归档报告..."
-          mkdir -p reports/archive
-          if [ -f "reports/daily_report_${{ steps.date.outputs.target_date }}.md" ]; then
-            cp "reports/daily_report_${{ steps.date.outputs.target_date }}.md" reports/archive/
-            echo "✅ 报告已归档"
-          fi
-          
-      - name: 🗑️ 清理旧数据
-        run: |
-          echo "🧹 清理旧数据..."
-          find data/hourly -name "*.json" -mtime +3 -delete
-          find data/raw -name "*.txt" -mtime +3 -delete
-          
-      - name: 📝 提交日报
-        if: always()
+      - name: 📝 提交报告
+        if: success()
         run: |
           git config --global user.name 'GitHub Actions Bot'
           git config --global user.email 'actions@github.com'
           
-          # 添加报告文件
-          git add reports/
-          git add data/daily_report.md data/daily_input.json 2>/dev/null || true
+          git add output/
           
           if git diff --cached --quiet; then
             echo "📭 无新报告需要提交"
           else
-            echo "📝 提交日报..."
-            git commit -m "📋 产业内参日报: ${{ steps.date.outputs.target_date }}"
-            
-            # 重试推送
-            for i in {1..3}; do
-              echo "尝试推送 ($i/3)..."
-              if git pull --rebase origin main && git push origin main; then
-                echo "✅ 推送成功"
-                break
-              else
-                echo "⚠️ 推送失败，等待10秒后重试..."
-                sleep 10
-              fi
-            done
+            git commit -m "📋 日报生成: ${{ steps.date.outputs.target_date }}"
+            git push
           fi
