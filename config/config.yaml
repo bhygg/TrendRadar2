@@ -1,6 +1,5 @@
 # ================= 舆论热点监测系统 =================
-# 版本: 4.0 | 设计: 重要舆论热点 + 市场情绪监测
-# 特点: 专注重大事件、政策变化、社会热点、市场情绪
+# 版本: 4.2 | 支持双机器人，专注重大热点
 
 app:
   version_check_url: "https://raw.githubusercontent.com/sansan0/TrendRadar/refs/heads/master/version"
@@ -9,7 +8,7 @@ app:
   log_level: "INFO"
 
 crawler:
-  request_interval: 1000  # 请求间隔(毫秒)
+  request_interval: 1000
   enable_crawler: true
   use_proxy: false
   default_proxy: "http://127.0.0.1:10086"
@@ -17,63 +16,106 @@ crawler:
   timeout: 30
   retry_times: 3
 
-# 🔸 推送模式选择
+# 🎯 报告配置
 report:
-  mode: "incremental"  # 默认增量模式，避免重复推送
-  rank_threshold: 5  # 排名高亮阈值
-  sort_by_position_first: true  # 按配置位置排序，确保重要关键词优先
-  max_news_per_keyword: 5  # 每个关键词最大显示数量
+  mode: "incremental"
+  rank_threshold: 5
+  sort_by_position_first: true
+  max_news_per_keyword: 5
   enable_hot_topic_clustering: true
-
-# 📊 权重配置（追实时热点型）
-weight:
-  rank_weight: 0.7  # 主要看排名
-  frequency_weight: 0.2  # 适度关注持续性
-  hotness_weight: 0.1  # 降低热度权重
+  clustering_method: "keyword_group"
+  min_group_score: 0.6
   
+  # 关键词分组显示
+  group_display:
+    enabled: true
+    max_groups: 15
+    min_items_per_group: 1
+    collapse_single_item: false
+    show_group_summary: true
+
+# 📊 权重配置（实时热点型）
+weight:
+  rank_weight: 0.65
+  frequency_weight: 0.25
+  hotness_weight: 0.1
+  
+  # 热点提升
   hot_topic_boost:
     enabled: true
-    min_platform_count: 3
-    boost_factor: 1.3
+    min_platform_count: 2
+    boost_factor: 1.4
+    cross_platform_threshold: 3
 
-# 🚨 通知配置
+# 🚨 通知配置 - 双机器人支持
 notification:
   enable_notification: true
-  message_batch_size: 4000
-  feishu_batch_size: 20000
-  batch_send_interval: 2
-  feishu_message_separator: "━━━━━━━━━━━━━━━━━━━"
+  message_batch_size: 3500
+  feishu_batch_size: 8000
+  batch_send_interval: 1
+  feishu_message_separator: "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
   
   # 飞书消息格式优化
-  feishu_message_format: "markdown"
-  use_card_message: true  # 使用卡片消息，排版更好
+  feishu_message_format: "rich_text"
+  use_feishu_card: false
+  card_header_color: "blue"
+  max_items_per_message: 20
+  truncate_long_messages: true
+  truncate_length: 8000
   
+  # 双机器人配置
+  multiple_bots:
+    enabled: true
+    bots:
+      - name: "primary"
+        webhook_env: "FEISHU_WEBHOOK_URL"
+        enabled: true
+        priority: 1
+        
+      - name: "secondary"
+        webhook_env: "FEISHU_WEBHOOK_URL_2"
+        enabled: true
+        priority: 2
+    
+    # 发送策略
+    send_strategy: "parallel"  # parallel: 同时发送, sequential: 顺序发送
+    retry_failed_bots: true
+    max_retry_attempts: 2
+  
+  # 紧急通知配置
   emergency_notification:
     enabled: true
-    keywords: ["突发", "紧急", "重大", "爆炸", "地震", "事故", "冲突", "战争"]
-    min_rank: 3  # 排名前三时紧急通知
-    
+    keywords: ["突发", "紧急", "重大", "爆炸", "地震", "事故", "死亡", "伤亡", "冲突", "战争"]
+    min_rank: 3
+    send_to_all_bots: true
+    use_different_format: true
+    emergency_format: "card"
+    emergency_color: "red"
+  
+  # 推送时间窗口（可选）
   push_window:
     enabled: false
     time_range:
       start: "08:00"
-      end: "22:00"
-    once_per_day: false
-  
+      end: "23:00"
+    only_weekdays: false
+    
+  # Webhook配置（留空，通过环境变量设置）
   webhooks:
-    feishu_url: ""  # 通过GitHub Secrets设置
+    feishu_url: ""
+    feishu_url_2: ""
 
-# 📈 平台配置（优化后的核心平台）
+# 📈 平台配置（精简优化版）
 platforms:
   # 核心舆论平台
   - id: "weibo"
     name: "微博"
-    weight: 1.8
+    weight: 2.0
     enabled: true
     
   - id: "baidu"
     name: "百度热搜"
-    weight: 1.7
+    weight: 1.8
     enabled: true
     
   - id: "zhihu"
@@ -95,82 +137,57 @@ platforms:
     name: "bilibili 热搜"
     weight: 1.3
     enabled: true
-
-  # 新闻资讯平台
+    
+  # 权威媒体
   - id: "thepaper"
     name: "澎湃新闻"
-    weight: 1.2
+    weight: 1.4
     enabled: true
     
   - id: "cankaoxiaoxi"
     name: "参考消息"
-    weight: 1.2
+    weight: 1.3
     enabled: true
     
   - id: "ifeng"
     name: "凤凰网"
-    weight: 1.1
+    weight: 1.2
     enabled: true
     
-  - id: "tencent-hot"
-    name: "腾讯新闻 综合早报"
-    weight: 1.1
-    enabled: true
-
-  # 财经资讯
+  # 财经平台
   - id: "wallstreetcn-hot"
-    name: "华尔街见闻 最热"
-    weight: 1.0
+    name: "华尔街见闻"
+    weight: 1.1
     enabled: true
     
   - id: "cls-hot"
-    name: "财联社热门"
-    weight: 1.0
+    name: "财联社"
+    weight: 1.1
     enabled: true
-    
-  - id: "jin10"
-    name: "金十数据"
-    weight: 0.9
-    enabled: true
-
-  # 其他
-  - id: "ithome"
-    name: "IT之家"
-    weight: 0.8
-    enabled: true
-
-# 📊 热点分析配置
-hotspot:
-  clustering:
-    enabled: true
-    method: "topic_modeling"
-    similarity_threshold: 0.7
-    
-  sentiment_analysis:
-    enabled: true
-    method: "keyword_based"
-    
-  cross_platform_analysis:
-    enabled: true
-    min_cross_count: 2
 
 # 🎯 性能配置
 performance:
-  max_concurrent_requests: 8  # 增加并发数提高效率
+  max_concurrent_requests: 8
   request_delay_ms: 800
-  timeout_ms: 20000
+  timeout_ms: 25000
   max_retries: 3
-  cache_hot_topics: true
-  cache_ttl_minutes: 30
+  cache_enabled: true
+  cache_ttl_minutes: 15
+  request_queue_size: 50
 
 # 📁 存储配置
 storage:
-  data_dir: "./data"
-  hot_topics_dir: "./data/hot_topics"
-  reports_dir: "./reports"
-  daily_summary_dir: "./reports/daily"
+  data_dir: "./output"
+  hot_topics_dir: "./output/hot_topics"
+  reports_dir: "./output/reports"
+  images_dir: "./output/images"
   
-  archive:
+  backup:
     enabled: true
-    keep_days: 30
-    compress_old: true
+    max_backups: 7
+    compress_backups: true
+    
+  cleanup:
+    enabled: true
+    keep_days: 14
+    clean_old_data: true
