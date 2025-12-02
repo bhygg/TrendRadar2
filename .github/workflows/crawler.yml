@@ -1,88 +1,60 @@
-name: Hot News Crawler
+name: 🕷️ 热点雷达 - 全平台抓取
+
 on:
   schedule:
-    - cron: "0 * * * *"
-  workflow_dispatch:
+    # 使用UTC时间，以下为北京时间 8:00-22:00 每30分钟运行一次（请根据GitHub Action限额调整）
+    - cron: "*/30 0-14 * * *"
+  workflow_dispatch: # 支持手动触发
 
 concurrency:
   group: crawler-${{ github.ref_name }}
-  cancel-in-progress: true
+  cancel-in-progress: true # 防止重复排队
 
 permissions:
-  contents: write
+  contents: write # 必须：允许工作流提交更改
 
 jobs:
   crawl:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    
+    timeout-minutes: 40 # 因平台增多，适当增加超时时间
+
     steps:
-      - name: Checkout repository
+      - name: "📥 检出代码"
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
           clean: true
-          
-      - name: Set up Python
+
+      - name: "🐍 设置Python环境"
         uses: actions/setup-python@v4
         with:
           python-version: "3.10"
-          
-      - name: Install dependencies
+
+      - name: "📦 安装依赖"
         run: |
           python -m pip install --upgrade pip setuptools wheel
           pip install -r requirements.txt
-          
-      - name: Verify required files
+
+      - name: "✅ 验证配置文件"
         run: |
-          echo "检查必需的配置文件..."
+          echo "=== 配置文件结构验证 ==="
+          echo "1. 检查核心配置文件..."
           if [ ! -f config/config.yaml ]; then
-            echo "错误: config/config.yaml 文件不存在"
+            echo "❌ 错误: config/config.yaml 不存在"
             exit 1
           fi
           if [ ! -f config/frequency_words.txt ]; then
-            echo "错误: config/frequency_words.txt 文件不存在"
+            echo "❌ 错误: config/frequency_words.txt 不存在"
             exit 1
           fi
-          echo "配置文件检查通过"
-          
-      - name: Run crawler
-        env:
-          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
-          GITHUB_ACTIONS: true
-        run: python main.py
-        
-      - name: Commit and push if changes
-        env:
-          BRANCH_NAME: ${{ github.event.repository.default_branch }}
-        run: |
-          git config --global user.name 'GitHub Actions'
-          git config --global user.email 'actions@github.com'
-          
-          git fetch origin $BRANCH_NAME
-          
-          git stash --include-untracked || echo "Nothing to stash"
-          git reset --hard origin/$BRANCH_NAME
-          git stash pop || echo "Nothing to pop"
-          
-          git add -A
-          
-          if git diff --quiet && git diff --staged --quiet; then
-            echo "No changes to commit"
-            exit 0
-          fi
-          
-          TIMESTAMP=$(TZ=Asia/Shanghai date "+%Y-%m-%d %H:%M:%S")
-          git commit -m "Auto update at $TIMESTAMP"
-          
-          for i in {1..5}; do
-            git pull --rebase origin $BRANCH_NAME && git push origin $BRANCH_NAME && {
-              echo "Successfully pushed on attempt $i"
-              exit 0
-            }
-            echo "Attempt $i failed, waiting $((i*3)) seconds..."
-            sleep $((i * 3))
-          done
-          
-          echo "Failed to push after 5 attempts"
-          exit 1
+
+          echo "2. 统计配置规模..."
+          PLATFORM_COUNT=$(grep -c "^\s*- id:" config/config.yaml)
+          KEYWORD_GROUP_COUNT=$(grep -c "^\# =====" config/frequency_words.txt)
+          echo "   - 配置平台数: $PLATFORM_COUNT 个"
+          echo "   - 关键词组数: $KEYWORD_GROUP_COUNT 组"
+
+          echo "3. 检查平台权重分层..."
+          echo "   第一梯队(2.0):" $(grep -A1 "第一梯队" config/config.yaml | grep "name:" | sed 's/.*: //')
+          echo "   第八梯队(0.6):" $(grep -A1 "第八梯队" config/config.yaml | grep "name:" | sed 's/.*: //')
+          echo "✅ 配置文件检查通过
