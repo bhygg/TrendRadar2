@@ -36,19 +36,40 @@ jobs:
             pip install -r requirements.txt
           fi
           
+      - name: Clean frequency words file
+        run: |
+          if [ -f config/frequency_words.txt ]; then
+            echo "原始关键词文件行数："
+            wc -l config/frequency_words.txt
+            echo "清理关键词文件，删除注释行..."
+            # 删除所有以#开头的注释行
+            sed -i '/^#/d' config/frequency_words.txt
+            echo "清理后的关键词文件行数："
+            wc -l config/frequency_words.txt
+            if [ ! -s config/frequency_words.txt ]; then
+              echo "关键词文件为空，添加默认关键词"
+              echo -e "中国\n美国\n经济\n科技\n股市\n华为\n特斯拉\n人工智能\n芯片\n疫情" > config/frequency_words.txt
+            fi
+            echo "清理后的关键词文件前20行："
+            head -20 config/frequency_words.txt
+          else
+            echo "关键词文件不存在，创建示例文件"
+            mkdir -p config
+            echo -e "中国\n美国\n经济\n科技\n股市\n华为\n特斯拉\n人工智能\n芯片\n疫情" > config/frequency_words.txt
+          fi
+          
       - name: Verify required files
         run: |
           echo "检查配置文件..."
           if [ ! -f config/config.yaml ]; then
             echo "创建默认配置文件..."
-            mkdir -p config
             cat > config/config.yaml << 'EOF'
           app:
             version_check_url: "https://raw.githubusercontent.com/sansan0/TrendRadar/refs/heads/master/version"
             show_version_update: true
 
           crawler:
-            request_interval: 1000
+            request_interval: 1500
             enable_crawler: true
             use_proxy: false
 
@@ -61,29 +82,24 @@ jobs:
             webhooks:
               feishu_url: "{{FEISHU_WEBHOOK_URL}}"
 
+          weight:
+            rank_weight: 0.25
+            frequency_weight: 0.65
+            hotness_weight: 0.10
+
           platforms:
+            - id: "wallstreetcn-hot"
+              name: "华尔街见闻热榜"
+            - id: "cls-hot"
+              name: "财联社热门"
+            - id: "jin10"
+              name: "金十数据"
             - id: "weibo"
-              name: "微博"
+              name: "微博热搜"
             - id: "zhihu"
-              name: "知乎"
+              name: "知乎热榜"
             - id: "toutiao"
               name: "今日头条"
-          EOF
-          fi
-          
-          if [ ! -f config/frequency_words.txt ]; then
-            echo "创建关键词文件..."
-            cat > config/frequency_words.txt << 'EOF'
-          中国
-          美国
-          经济
-          科技
-          股市
-          华为
-          特斯拉
-          人工智能
-          芯片
-          疫情
           EOF
           fi
           
@@ -97,8 +113,7 @@ jobs:
             exit 1
           fi
           
-          echo "飞书webhook URL已设置（隐藏）"
-          echo "URL长度：${#FEISHU_WEBHOOK_URL}"
+          echo "飞书webhook URL已设置"
           
           # 发送测试消息
           TEST_RESPONSE=$(curl -s -w "%{http_code}" -X POST "$FEISHU_WEBHOOK_URL" \
@@ -111,19 +126,11 @@ jobs:
             }')
           
           HTTP_CODE=$(echo "$TEST_RESPONSE" | tail -1)
-          RESPONSE_BODY=$(echo "$TEST_RESPONSE" | sed '$d')
-          
-          echo "HTTP响应码：$HTTP_CODE"
-          echo "响应内容：$RESPONSE_BODY"
           
           if [ "$HTTP_CODE" = "200" ]; then
             echo "✅ 飞书连接测试成功"
           else
-            echo "❌ 飞书连接测试失败"
-            echo "请检查："
-            echo "1. 飞书机器人是否已添加到群组"
-            echo "2. 飞书机器人安全设置是否包含'热点'关键词"
-            echo "3. Webhook URL是否正确"
+            echo "❌ 飞书连接测试失败，HTTP响应码：$HTTP_CODE"
           fi
           
       - name: Run crawler
@@ -145,40 +152,48 @@ jobs:
           # 替换飞书URL
           sed -i "s|{{FEISHU_WEBHOOK_URL}}|$FEISHU_WEBHOOK_URL|g" config/config.yaml
           
-          echo "替换后的feishu_url配置："
-          grep -n "feishu_url" config/config.yaml
-          
           echo "运行爬虫..."
-          python main.py
+          # 运行并记录详细日志
+          python main.py 2>&1 | tee run.log
           
-          echo "检查输出..."
+          echo "爬虫运行完成，检查输出..."
           if [ -d "output" ]; then
             echo "输出文件列表："
             ls -la output/
+            
+            if [ -f "output/latest_news.txt" ]; then
+              NEWS_COUNT=$(grep -c "^\[" output/latest_news.txt 2>/dev/null || echo "0")
+              echo "本次爬取到 $NEWS_COUNT 条新闻"
+              echo "最新新闻前5条："
+              head -10 output/latest_news.txt
+            else
+              echo "没有生成最新新闻文件"
+            fi
             
             if [ -f "output/notification_log.txt" ]; then
               echo "通知日志内容："
               cat output/notification_log.txt
             fi
+          else
+            echo "输出目录不存在"
           fi
+          
+          echo "运行日志尾部："
+          tail -50 run.log
           
       - name: Check notification status
         if: always()
         run: |
-          echo "检查运行结果..."
-          if [ -f "output/latest_news.txt" ]; then
-            NEWS_COUNT=$(grep -c "^\[" output/latest_news.txt || echo "0")
-            echo "本次爬取到 $NEWS_COUNT 条新闻"
-            
-            if [ -f "output/notification_sent.txt" ]; then
-              echo "✅ 通知已发送"
-              cat output/notification_sent.txt
-            else
-              echo "⚠️ 通知未发送，可能原因："
-              echo "1. 没有匹配的新闻"
-              echo "2. 飞书发送失败"
-              echo "3. 配置文件通知未启用"
-            fi
+          echo "检查通知状态..."
+          if [ -f "output/notification_sent.txt" ]; then
+            echo "✅ 通知已发送"
+            echo "发送时间：$(cat output/notification_sent.txt)"
+          else
+            echo "⚠️ 通知未发送"
+            echo "可能原因："
+            echo "1. 没有匹配到新闻"
+            echo "2. 飞书发送失败"
+            echo "3. 配置文件通知未启用"
           fi
           
       - name: Commit and push if changes
