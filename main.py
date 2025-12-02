@@ -73,8 +73,11 @@ def load_config():
         "VERSION_CHECK_URL": config_data["app"]["version_check_url"],
         "SHOW_VERSION_UPDATE": config_data["app"]["show_version_update"],
         "REQUEST_INTERVAL": config_data["crawler"]["request_interval"],
-        "REPORT_MODE": os.environ.get("REPORT_MODE", "").strip()
-        or config_data["report"]["mode"],
+        "REPORT_MODE": (
+        os.environ.get("TREND_RADAR_MODE", "").strip()
+        or os.environ.get("REPORT_MODE", "").strip()
+        or config_data["report"]["mode"]
+        ),
         "RANK_THRESHOLD": config_data["report"]["rank_threshold"],
         "SORT_BY_POSITION_FIRST": os.environ.get("SORT_BY_POSITION_FIRST", "").strip().lower()
         in ("true", "1")
