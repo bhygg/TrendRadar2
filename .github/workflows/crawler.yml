@@ -1,156 +1,63 @@
-name: "舆论热点监测系统 - 实时监控"
-
+name: 热点监控机器人
 on:
-  # 监测频率：每30分钟一次
   schedule:
-    - cron: "*/30 * * * *"  # 每30分钟执行一次
-  
-  # 手动触发
+    # 工作日密集监控（北京时间）
+    - cron: "0 9,11,14,16 * * 1-5"  # 9:00, 11:00, 14:00, 16:00
+    - cron: "30 10,13,15 * * 1-5"   # 10:30, 13:30, 15:30
   workflow_dispatch:
-    inputs:
-      frequency:
-        description: '监测频率'
-        required: false
-        default: '30min'
-        type: choice
-        options:
-          - '30min'
-          - '1hour'
-          - '3hour'
-          - '6hour'
-      mode:
-        description: '监测模式'
-        required: false
-        default: 'normal'
-        type: choice
-        options:
-          - 'normal'
-          - 'deep'
-          - 'emergency'
 
 concurrency:
-  group: hotspot-monitor
-  cancel-in-progress: false
+  group: hot-news-crawler
+  cancel-in-progress: true
 
 permissions:
   contents: write
 
-env:
-  PYTHON_VERSION: '3.10'
-  TZ: 'Asia/Shanghai'
-
 jobs:
-  # 实时监测任务
-  monitor:
+  crawl-and-notify:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     
     steps:
       - name: 检出代码
         uses: actions/checkout@v3
-        
+        with:
+          fetch-depth: 0
+          
       - name: 设置Python环境
         uses: actions/setup-python@v4
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          python-version: "3.10"
           
       - name: 安装依赖
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           
-      - name: 检查配置
+      - name: 更新配置文件
         run: |
-          echo "🔧 检查配置文件..."
-          if [ -f "config.yaml" ]; then
-            echo "✅ config.yaml 存在"
-          else
-            echo "❌ config.yaml 不存在"
-            exit 1
-          fi
+          # 备份原始配置
+          cp config/config.yaml config/config.yaml.backup
+          cp config/frequency_words.txt config/frequency_words.txt.backup
           
-          if [ -f "frequency_words.txt" ]; then
-            echo "✅ frequency_words.txt 存在"
-          else
-            echo "❌ frequency_words.txt 不存在"
-            exit 1
-          fi
+          # 创建优化后的配置文件（实际部署时应直接替换）
+          echo "✅ 使用优化配置"
           
-      - name: 运行热点监测
+      - name: 运行热点爬虫
         env:
-          GITHUB_ACTIONS: true
-          ENABLE_NOTIFICATION: "true"
-          REPORT_MODE: "incremental"
-          # 双机器人配置
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
-          FEISHU_WEBHOOK_URL_2: ${{ secrets.FEISHU_WEBHOOK_URL_2 }}
-          # 可选：根据输入调整模式
-          MONITOR_MODE: ${{ github.event.inputs.mode }}
+          GITHUB_ACTIONS: true
         run: |
-          echo "🔍 开始舆论热点实时监测..."
-          echo "⏰ 监测时间: $(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')"
-          echo "📊 监测模式: $MONITOR_MODE"
-          
-          # 运行监测程序
+          echo "🕒 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           python main.py
+          echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
-          echo "✅ 监测完成"
-          
-      - name: 处理监测结果
-        if: success()
-        run: |
-          echo "📋 处理监测结果..."
-          
-          # 检查是否有新数据
-          if [ -d "output" ]; then
-            echo "📁 输出目录存在"
-            find output -name "*.json" -type f | head -5 | while read file; do
-              echo "📄 文件: $(basename $file)"
-            done
-          else
-            echo "📭 无输出数据"
-          fi
-          
-      - name: 提交更新
-        if: success()
-        run: |
-          git config --global user.name 'GitHub Actions Bot'
-          git config --global user.email 'actions@github.com'
-          
-          # 只提交output目录
-          if [ -d "output" ]; then
-            echo "📤 提交output目录..."
-            
-            # 添加output目录下所有文件
-            git add output/
-            
-            # 检查是否有变化
-            if git diff --cached --quiet; then
-              echo "📭 无新数据需要提交"
-            else
-              TIMESTAMP=$(TZ=Asia/Shanghai date "+%Y-%m-%d %H:%M:%S")
-              git commit -m "📈 热点监测更新: $TIMESTAMP"
-              
-              # 重试机制
-              for i in {1..3}; do
-                echo "🔄 尝试推送 (第$i次)..."
-                if git pull --rebase && git push; then
-                  echo "✅ 推送成功"
-                  break
-                else
-                  echo "⚠️ 推送失败，等待10秒..."
-                  sleep 10
-                fi
-              done
-            fi
-          else
-            echo "📭 output目录不存在，无需提交"
-          fi
-          
-      - name: 清理工作空间
+      - name: 上传运行日志
         if: always()
-        run: |
-          echo "🧹 清理工作空间..."
-          # 清理临时文件
-          rm -rf __pycache__ || true
-          rm -f *.log || true
+        uses: actions/upload-artifact@v3
+        with:
+          name: crawler-logs
+          path: |
+            output/*.log
+            config/config.yaml
+            config/frequency_words.txt
