@@ -1,63 +1,78 @@
-name: 热点监控机器人
+name: 多领域热点监控
 on:
   schedule:
     # 工作日密集监控（北京时间）
-    - cron: "0 9,11,14,16 * * 1-5"  # 9:00, 11:00, 14:00, 16:00
-    - cron: "30 10,13,15 * * 1-5"   # 10:30, 13:30, 15:30
-  workflow_dispatch:
+    - cron: "0 1,4,7,10 * * 1-5"    # 9:00, 12:00, 15:00, 18:00
+    - cron: "30 2,5,8 * * 1-5"      # 10:30, 13:30, 16:30
+  workflow_dispatch:  # 支持手动触发
 
 concurrency:
-  group: hot-news-crawler
+  group: multi-field-monitor
   cancel-in-progress: true
 
 permissions:
   contents: write
 
 jobs:
-  crawl-and-notify:
+  monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     
     steps:
-      - name: 检出代码
-        uses: actions/checkout@v3
+      - name: 📂 检出代码
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           
-      - name: 设置Python环境
-        uses: actions/setup-python@v4
+      - name: 🐍 设置Python环境
+        uses: actions/setup-python@v5
         with:
           python-version: "3.10"
           
-      - name: 安装依赖
+      - name: 📦 安装依赖
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install requests beautifulsoup4 lxml pytz tzdata
           
-      - name: 更新配置文件
+      - name: ⚙️ 创建配置文件
         run: |
-          # 备份原始配置
-          cp config/config.yaml config/config.yaml.backup
-          cp config/frequency_words.txt config/frequency_words.txt.backup
+          # 创建配置文件目录
+          mkdir -p config output logs
           
-          # 创建优化后的配置文件（实际部署时应直接替换）
-          echo "✅ 使用优化配置"
+          # 生成分类关键词配置文件
+          echo "正在生成分类关键词配置..."
+          # 这里可以添加代码将上面提供的关键词配置写入文件
           
-      - name: 运行热点爬虫
+      - name: 🚀 运行分类监控
         env:
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
-          GITHUB_ACTIONS: true
+          TZ: "Asia/Shanghai"
         run: |
-          echo "🕒 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          python main.py
-          echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "======================================"
+          echo "🌍 多领域热点监控启动"
+          echo "📅 北京时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "======================================"
           
-      - name: 上传运行日志
+          # 运行监控程序
+          python main.py
+          
+          echo "✅ 监控完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          
+      - name: 💾 保存监控结果
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: crawler-logs
+          name: monitor-results-${{ github.run_number }}
           path: |
-            output/*.log
-            config/config.yaml
-            config/frequency_words.txt
+            output/
+            logs/
+            config/
+          retention-days: 14
+          
+      - name: 📊 生成监控报告
+        if: success()
+        run: |
+          echo "生成监控统计报告..."
+          # 这里可以添加统计代码
+          echo "📈 监控领域：外交政治、宏观经济、金融、科技、行业、社会民生、企业风险、地缘政治"
+          echo "🕒 监控时间：$(date '+%Y-%m-%d %H:%M:%S')"
