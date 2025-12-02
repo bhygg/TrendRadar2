@@ -39,19 +39,17 @@ jobs:
       - name: Clean frequency words file
         run: |
           if [ -f config/frequency_words.txt ]; then
-            echo "原始关键词文件行数："
-            wc -l config/frequency_words.txt
             echo "清理关键词文件，删除注释行..."
             # 删除所有以#开头的注释行
             sed -i '/^#/d' config/frequency_words.txt
+            # 删除空行
+            sed -i '/^$/d' config/frequency_words.txt
             echo "清理后的关键词文件行数："
             wc -l config/frequency_words.txt
             if [ ! -s config/frequency_words.txt ]; then
               echo "关键词文件为空，添加默认关键词"
               echo -e "中国\n美国\n经济\n科技\n股市\n华为\n特斯拉\n人工智能\n芯片\n疫情" > config/frequency_words.txt
             fi
-            echo "清理后的关键词文件前20行："
-            head -20 config/frequency_words.txt
           else
             echo "关键词文件不存在，创建示例文件"
             mkdir -p config
@@ -103,36 +101,6 @@ jobs:
           EOF
           fi
           
-      - name: Test Feishu connection
-        env:
-          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
-        run: |
-          echo "测试飞书连接..."
-          if [ -z "$FEISHU_WEBHOOK_URL" ]; then
-            echo "错误：FEISHU_WEBHOOK_URL 未设置"
-            exit 1
-          fi
-          
-          echo "飞书webhook URL已设置"
-          
-          # 发送测试消息
-          TEST_RESPONSE=$(curl -s -w "%{http_code}" -X POST "$FEISHU_WEBHOOK_URL" \
-            -H "Content-Type: application/json" \
-            -d '{
-              "msg_type": "text",
-              "content": {
-                "text": "🔄 TrendRadar 测试消息\n时间：'"$(date '+%Y-%m-%d %H:%M:%S')"'\n状态：爬虫即将启动"
-              }
-            }')
-          
-          HTTP_CODE=$(echo "$TEST_RESPONSE" | tail -1)
-          
-          if [ "$HTTP_CODE" = "200" ]; then
-            echo "✅ 飞书连接测试成功"
-          else
-            echo "❌ 飞书连接测试失败，HTTP响应码：$HTTP_CODE"
-          fi
-          
       - name: Run crawler
         env:
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
@@ -164,36 +132,11 @@ jobs:
             if [ -f "output/latest_news.txt" ]; then
               NEWS_COUNT=$(grep -c "^\[" output/latest_news.txt 2>/dev/null || echo "0")
               echo "本次爬取到 $NEWS_COUNT 条新闻"
-              echo "最新新闻前5条："
-              head -10 output/latest_news.txt
             else
               echo "没有生成最新新闻文件"
             fi
-            
-            if [ -f "output/notification_log.txt" ]; then
-              echo "通知日志内容："
-              cat output/notification_log.txt
-            fi
           else
             echo "输出目录不存在"
-          fi
-          
-          echo "运行日志尾部："
-          tail -50 run.log
-          
-      - name: Check notification status
-        if: always()
-        run: |
-          echo "检查通知状态..."
-          if [ -f "output/notification_sent.txt" ]; then
-            echo "✅ 通知已发送"
-            echo "发送时间：$(cat output/notification_sent.txt)"
-          else
-            echo "⚠️ 通知未发送"
-            echo "可能原因："
-            echo "1. 没有匹配到新闻"
-            echo "2. 飞书发送失败"
-            echo "3. 配置文件通知未启用"
           fi
           
       - name: Commit and push if changes
