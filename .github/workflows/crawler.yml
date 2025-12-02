@@ -3,7 +3,7 @@ name: "舆论热点监测系统"
 on:
   # 更频繁的监测：每30分钟一次
   schedule:
-    - cron: "*/30 * * * *"  # 每30分钟
+    - cron: "*/30 * * * *"  # 每30分钟执行一次
   
   # 手动触发
   workflow_dispatch:
@@ -60,7 +60,7 @@ jobs:
           echo "🔍 开始舆论热点实时监测..."
           echo "⏰ 监测时间: $(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')"
           
-          # 运行监测
+          # 运行监测 - 使用增量模式
           python main.py
           
           echo "✅ 实时监测完成"
@@ -69,7 +69,7 @@ jobs:
         if: success()
         run: |
           echo "🚨 检查紧急事件..."
-          # 可以添加紧急事件检查逻辑
+          # 紧急事件检查逻辑
           
       - name: 提交数据
         if: success()
@@ -101,6 +101,7 @@ jobs:
     if: github.event.schedule == '0 0 * * *' || (github.event.inputs.mode == 'daily')
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    needs: realtime-monitor
     
     steps:
       - name: 检出代码
@@ -120,7 +121,7 @@ jobs:
         env:
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
           ENABLE_NOTIFICATION: "true"
-          REPORT_MODE: "daily"
+          REPORT_MODE: "daily"  # 每日汇总模式
         run: |
           echo "📊 生成每日热点汇总..."
           
@@ -131,19 +132,6 @@ jobs:
           python main.py
           
           echo "✅ 每日汇总完成"
-          
-          # 生成汇总报告
-          echo "📋 生成热点分析报告..."
-          
-      - name: 发送汇总报告
-        if: success()
-        env:
-          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
-        run: |
-          echo "📨 发送每日汇总报告..."
-          
-          # 报告将由main.py自动发送
-          echo "✅ 飞书通知已由主程序处理"
           
       - name: 归档报告
         run: |
@@ -170,9 +158,9 @@ jobs:
             git push
           fi
   
-  # 任务3：热点趋势分析（每周一）
+  # 任务3：热点趋势分析（每周一北京时间8点）
   weekly-analysis:
-    if: github.event.schedule == '0 0 * * 1'  # 每周一UTC时间0点
+    if: github.event.schedule == '0 8 * * 1'  # 每周一北京时间8点
     runs-on: ubuntu-latest
     timeout-minutes: 40
     
@@ -191,20 +179,42 @@ jobs:
         run: |
           echo "📈 生成周度热点趋势报告..."
           
-          # 这里可以添加周度分析逻辑
-          echo "📊 收集过去7天热点数据..."
-          
-          # 发送周报通知
-          WEEK=$(TZ='Asia/Shanghai' date +'%Y年%U周')
-          MESSAGE='{
-            "msg_type": "text",
-            "content": {
-              "text": "类型：webhook content.weekly_report\n📈 舆论热点周度报告 '${WEEK}'\n\n🔍 本周热点趋势分析已生成。\n\n⏰ 生成时间: '$(TZ="Asia/Shanghai" date +"%Y-%m-%d %H:%M:%S")'"
-            }
-          }'
-          
-          if [ -n "$FEISHU_WEBHOOK_URL" ]; then
-            curl -s -X POST -H "Content-Type: application/json" -d "$MESSAGE" "$FEISHU_WEBHOOK_URL"
+          # 运行周度分析脚本（假设有weekly_report.py）
+          if [ -f "weekly_report.py" ]; then
+            python weekly_report.py
+          else
+            echo "⚠️ 周度报告脚本不存在，生成简要周报..."
+            
+            # 发送周报通知
+            WEEK=$(TZ='Asia/Shanghai' date +'%Y年%U周')
+            MESSAGE='{
+              "msg_type": "interactive",
+              "card": {
+                "config": {
+                  "wide_screen_mode": true
+                },
+                "header": {
+                  "title": {
+                    "tag": "plain_text",
+                    "content": "📈 舆论热点周度报告"
+                  },
+                  "template": "wathet"
+                },
+                "elements": [
+                  {
+                    "tag": "div",
+                    "text": {
+                      "tag": "lark_md",
+                      "content": "**报告周期**: '${WEEK}'\\n**生成时间**: '$(TZ="Asia/Shanghai" date +"%Y-%m-%d %H:%M:%S")'\\n\\n本周热点趋势分析已生成，请查看报告文件。"
+                    }
+                  }
+                ]
+              }
+            }'
+            
+            if [ -n "$FEISHU_WEBHOOK_URL" ]; then
+              curl -s -X POST -H "Content-Type: application/json" -d "$MESSAGE" "$FEISHU_WEBHOOK_URL"
+            fi
           fi
           
       - name: 清理旧数据
