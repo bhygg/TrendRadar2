@@ -1,111 +1,91 @@
-name: 多领域热点监控
+name: Hot News Crawler
 on:
   schedule:
-    # 工作日密集监控（北京时间）
-    - cron: "0 1,4,7,10 * * 1-5"    # 9:00, 12:00, 15:00, 18:00
-    - cron: "30 2,5,8 * * 1-5"      # 10:30, 13:30, 16:30
-  workflow_dispatch:  # 支持手动触发
+    - cron: "0 * * * *"
+  workflow_dispatch:
 
 concurrency:
-  group: multi-field-monitor
+  group: crawler-${{ github.ref_name }}
   cancel-in-progress: true
 
 permissions:
   contents: write
 
 jobs:
-  monitor:
+  crawl:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     
     steps:
-      - name: 📂 检出代码
-        uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v3
         with:
           fetch-depth: 0
+          clean: true
           
-      - name: 🐍 设置Python环境
-        uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@v4
         with:
           python-version: "3.10"
           
-      - name: 📦 安装核心依赖
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          echo "安装必要的Python包..."
-          pip install requests beautifulsoup4 lxml pytz tzdata pyyaml feedparser
-          
-      - name: 📦 安装项目依赖
-        run: |
+          pip install PyYAML feedparser
           if [ -f requirements.txt ]; then
-            echo "发现requirements.txt，安装项目依赖..."
             pip install -r requirements.txt
-          else
-            echo "未找到requirements.txt，跳过"
           fi
           
-      - name: 🔍 检查项目结构
+      - name: Verify required files
         run: |
-          echo "当前目录结构:"
-          ls -la
-          echo ""
-          echo "配置文件检查:"
-          if [ -f "config/config.yaml" ]; then
-            echo "✅ config/config.yaml 存在"
-          else
-            echo "⚠️ config/config.yaml 不存在"
-            # 创建配置文件目录
-            mkdir -p config
-          fi
-          
-          if [ -f "config/frequency_words.txt" ]; then
-            echo "✅ config/frequency_words.txt 存在"
-          else
-            echo "⚠️ config/frequency_words.txt 不存在"
-          fi
-          
-      - name: 🚀 运行分类监控
-        env:
-          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
-          TZ: "Asia/Shanghai"
-        run: |
-          echo "======================================"
-          echo "🌍 多领域热点监控启动"
-          echo "📅 北京时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          echo "======================================"
-          
-          echo "检查Python环境:"
-          python --version
-          pip list | grep -E "yaml|feedparser|requests"
-          
-          echo ""
-          echo "运行监控程序..."
-          if [ -f "main.py" ]; then
-            python main.py
-            EXIT_CODE=$?
-            echo "程序退出代码: $EXIT_CODE"
-          else
-            echo "❌ 错误: main.py 文件不存在"
-            ls -la *.py || echo "没有找到Python文件"
+          echo "检查必需的配置文件..."
+          if [ ! -f config/config.yaml ]; then
+            echo "错误: config/config.yaml 文件不存在"
             exit 1
           fi
+          if [ ! -f config/frequency_words.txt ]; then
+            echo "错误: config/frequency_words.txt 文件不存在"
+            exit 1
+          fi
+          echo "配置文件检查通过"
           
-          echo "✅ 监控完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          
-      - name: 💾 保存监控结果
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: monitor-results-${{ github.run_number }}
-          path: |
-            output/
-            logs/
-            config/
-          retention-days: 14
-          
-      - name: 📊 生成监控报告
-        if: success()
+      - name: Run crawler
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          GITHUB_ACTIONS: true
+        run: python main.py
+        
+      - name: Commit and push if changes
+        env:
+          BRANCH_NAME: ${{ github.event.repository.default_branch }}
         run: |
-          echo "📈 监控领域：外交政治、宏观经济、金融、科技、行业、社会民生、企业风险、地缘政治"
-          echo "🕒 监控时间：$(date '+%Y-%m-%d %H:%M:%S')"
-          echo "🏷️ 运行编号：${{ github.run_number }}"
+          git config --global user.name 'GitHub Actions'
+          git config --global user.email 'actions@github.com'
+          
+          git fetch origin $BRANCH_NAME
+          
+          git stash --include-untracked || echo "Nothing to stash"
+          git reset --hard origin/$BRANCH_NAME
+          git stash pop || echo "Nothing to pop"
+          
+          git add -A
+          
+          if git diff --quiet && git diff --staged --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          
+          TIMESTAMP=$(TZ=Asia/Shanghai date "+%Y-%m-%d %H:%M:%S")
+          git commit -m "Auto update at $TIMESTAMP"
+          
+          for i in {1..5}; do
+            git pull --rebase origin $BRANCH_NAME && git push origin $BRANCH_NAME && {
+              echo "Successfully pushed on attempt $i"
+              exit 0
+            }
+            echo "Attempt $i failed, waiting $((i*3)) seconds..."
+            sleep $((i * 3))
+          done
+          
+          echo "Failed to push after 5 attempts"
+          exit 1
