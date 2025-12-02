@@ -1,25 +1,35 @@
-name: "舆论热点监测系统"
+name: "舆论热点监测系统 - 实时监控"
 
 on:
-  # 更频繁的监测：每30分钟一次
+  # 监测频率：每30分钟一次
   schedule:
     - cron: "*/30 * * * *"  # 每30分钟执行一次
   
   # 手动触发
   workflow_dispatch:
     inputs:
-      mode:
-        description: '运行模式'
+      frequency:
+        description: '监测频率'
         required: false
-        default: 'monitor'
+        default: '30min'
         type: choice
         options:
-          - monitor
-          - daily
-          - emergency
+          - '30min'
+          - '1hour'
+          - '3hour'
+          - '6hour'
+      mode:
+        description: '监测模式'
+        required: false
+        default: 'normal'
+        type: choice
+        options:
+          - 'normal'
+          - 'deep'
+          - 'emergency'
 
 concurrency:
-  group: hotspot-${{ github.ref }}
+  group: hotspot-monitor
   cancel-in-progress: false
 
 permissions:
@@ -30,11 +40,10 @@ env:
   TZ: 'Asia/Shanghai'
 
 jobs:
-  # 任务1：实时监测（每30分钟）
-  realtime-monitor:
-    if: github.event_name == 'schedule' || (github.event.inputs.mode == 'monitor')
+  # 实时监测任务
+  monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     
     steps:
       - name: 检出代码
@@ -50,175 +59,98 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           
-      - name: 实时监测
+      - name: 检查配置
+        run: |
+          echo "🔧 检查配置文件..."
+          if [ -f "config.yaml" ]; then
+            echo "✅ config.yaml 存在"
+          else
+            echo "❌ config.yaml 不存在"
+            exit 1
+          fi
+          
+          if [ -f "frequency_words.txt" ]; then
+            echo "✅ frequency_words.txt 存在"
+          else
+            echo "❌ frequency_words.txt 不存在"
+            exit 1
+          fi
+          
+      - name: 运行热点监测
         env:
           GITHUB_ACTIONS: true
           ENABLE_NOTIFICATION: "true"
-          REPORT_MODE: "incremental"  # 增量模式，只关注新热点
+          REPORT_MODE: "incremental"
+          # 双机器人配置
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          FEISHU_WEBHOOK_URL_2: ${{ secrets.FEISHU_WEBHOOK_URL_2 }}
+          # 可选：根据输入调整模式
+          MONITOR_MODE: ${{ github.event.inputs.mode }}
         run: |
           echo "🔍 开始舆论热点实时监测..."
           echo "⏰ 监测时间: $(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')"
+          echo "📊 监测模式: $MONITOR_MODE"
           
-          # 运行监测 - 使用增量模式
+          # 运行监测程序
           python main.py
           
-          echo "✅ 实时监测完成"
+          echo "✅ 监测完成"
           
-      - name: 检查紧急事件
+      - name: 处理监测结果
         if: success()
         run: |
-          echo "🚨 检查紧急事件..."
-          # 紧急事件检查逻辑
+          echo "📋 处理监测结果..."
           
-      - name: 提交数据
-        if: success()
-        run: |
-          git config --global user.name 'GitHub Actions Bot'
-          git config --global user.email 'actions@github.com'
-          
-          git add output/ data/
-          
-          if git diff --cached --quiet; then
-            echo "📭 无新数据需要提交"
-          else
-            TIMESTAMP=$(TZ=Asia/Shanghai date "+%Y-%m-%d %H:%M:%S")
-            git commit -m "📈 热点监测更新: $TIMESTAMP"
-            
-            for i in {1..3}; do
-              if git pull --rebase && git push; then
-                echo "✅ 推送成功"
-                break
-              else
-                echo "⚠️ 推送失败，等待10秒..."
-                sleep 10
-              fi
+          # 检查是否有新数据
+          if [ -d "output" ]; then
+            echo "📁 输出目录存在"
+            find output -name "*.json" -type f | head -5 | while read file; do
+              echo "📄 文件: $(basename $file)"
             done
-          fi
-  
-  # 任务2：每日汇总（每天8点北京时间）
-  daily-summary:
-    if: github.event.schedule == '0 0 * * *' || (github.event.inputs.mode == 'daily')
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    needs: realtime-monitor
-    
-    steps:
-      - name: 检出代码
-        uses: actions/checkout@v3
-        
-      - name: 设置Python环境
-        uses: actions/setup-python@v4
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          
-      - name: 安装依赖
-        run: |
-          pip install -r requirements.txt
-          
-      - name: 生成每日热点汇总
-        id: summary
-        env:
-          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
-          ENABLE_NOTIFICATION: "true"
-          REPORT_MODE: "daily"  # 每日汇总模式
-        run: |
-          echo "📊 生成每日热点汇总..."
-          
-          DATE=$(TZ='Asia/Shanghai' date +'%Y-%m-%d')
-          echo "📅 汇总日期: $DATE"
-          
-          # 运行日报生成
-          python main.py
-          
-          echo "✅ 每日汇总完成"
-          
-      - name: 归档报告
-        run: |
-          DATE=$(TZ='Asia/Shanghai' date +'%Y-%m-%d')
-          mkdir -p reports/archive
-          
-          if [ -f "output/$DATE/html/当日汇总.html" ]; then
-            cp "output/$DATE/html/当日汇总.html" "reports/archive/hotspot_summary_$DATE.html"
+          else
+            echo "📭 无输出数据"
           fi
           
-      - name: 提交汇总
+      - name: 提交更新
         if: success()
         run: |
           git config --global user.name 'GitHub Actions Bot'
           git config --global user.email 'actions@github.com'
           
-          git add reports/archive/
-          
-          if git diff --cached --quiet; then
-            echo "📭 无新报告需要提交"
-          else
-            DATE=$(TZ='Asia/Shanghai' date +'%Y-%m-%d')
-            git commit -m "📋 热点每日汇总: $DATE"
-            git push
-          fi
-  
-  # 任务3：热点趋势分析（每周一北京时间8点）
-  weekly-analysis:
-    if: github.event.schedule == '0 8 * * 1'  # 每周一北京时间8点
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
-    
-    steps:
-      - name: 检出代码
-        uses: actions/checkout@v3
-        
-      - name: 设置Python环境
-        uses: actions/setup-python@v4
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          
-      - name: 生成周度热点报告
-        env:
-          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
-        run: |
-          echo "📈 生成周度热点趋势报告..."
-          
-          # 运行周度分析脚本（假设有weekly_report.py）
-          if [ -f "weekly_report.py" ]; then
-            python weekly_report.py
-          else
-            echo "⚠️ 周度报告脚本不存在，生成简要周报..."
+          # 只提交output目录
+          if [ -d "output" ]; then
+            echo "📤 提交output目录..."
             
-            # 发送周报通知
-            WEEK=$(TZ='Asia/Shanghai' date +'%Y年%U周')
-            MESSAGE='{
-              "msg_type": "interactive",
-              "card": {
-                "config": {
-                  "wide_screen_mode": true
-                },
-                "header": {
-                  "title": {
-                    "tag": "plain_text",
-                    "content": "📈 舆论热点周度报告"
-                  },
-                  "template": "wathet"
-                },
-                "elements": [
-                  {
-                    "tag": "div",
-                    "text": {
-                      "tag": "lark_md",
-                      "content": "**报告周期**: '${WEEK}'\\n**生成时间**: '$(TZ="Asia/Shanghai" date +"%Y-%m-%d %H:%M:%S")'\\n\\n本周热点趋势分析已生成，请查看报告文件。"
-                    }
-                  }
-                ]
-              }
-            }'
+            # 添加output目录下所有文件
+            git add output/
             
-            if [ -n "$FEISHU_WEBHOOK_URL" ]; then
-              curl -s -X POST -H "Content-Type: application/json" -d "$MESSAGE" "$FEISHU_WEBHOOK_URL"
+            # 检查是否有变化
+            if git diff --cached --quiet; then
+              echo "📭 无新数据需要提交"
+            else
+              TIMESTAMP=$(TZ=Asia/Shanghai date "+%Y-%m-%d %H:%M:%S")
+              git commit -m "📈 热点监测更新: $TIMESTAMP"
+              
+              # 重试机制
+              for i in {1..3}; do
+                echo "🔄 尝试推送 (第$i次)..."
+                if git pull --rebase && git push; then
+                  echo "✅ 推送成功"
+                  break
+                else
+                  echo "⚠️ 推送失败，等待10秒..."
+                  sleep 10
+                fi
+              done
             fi
+          else
+            echo "📭 output目录不存在，无需提交"
           fi
           
-      - name: 清理旧数据
+      - name: 清理工作空间
+        if: always()
         run: |
-          echo "🧹 清理旧数据..."
-          find output -type f -mtime +30 -delete
-          find data -type f -mtime +30 -delete
+          echo "🧹 清理工作空间..."
+          # 清理临时文件
+          rm -rf __pycache__ || true
+          rm -f *.log || true
