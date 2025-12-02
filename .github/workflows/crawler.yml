@@ -1,8 +1,7 @@
 name: Hot News Crawler
 on:
   schedule:
-    # 北京时间：9:00, 11:00, 14:00, 16:00, 18:00
-    - cron: "0 1,3,6,8,10 * * 1-5"
+    - cron: "0 * * * *"
   workflow_dispatch:
 
 concurrency:
@@ -31,251 +30,29 @@ jobs:
           
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install PyYAML feedparser
-          if [ -f requirements.txt ]; then
-            pip install -r requirements.txt
-          fi
-          
-      - name: Clean and prepare files
-        run: |
-          echo "准备配置文件和关键词..."
-          
-          # 确保目录存在
-          mkdir -p config output
-          
-          # 清理关键词文件（删除注释行和空行）
-          if [ -f config/frequency_words.txt ]; then
-            echo "清理关键词文件..."
-            # 删除注释行和空行
-            grep -v '^#' config/frequency_words.txt | grep -v '^$' > config/frequency_clean.txt
-            mv config/frequency_clean.txt config/frequency_words.txt
-            echo "关键词数量："
-            wc -l config/frequency_words.txt
-          fi
-          
-          # 确保配置文件存在
-          if [ ! -f config/config.yaml ]; then
-            echo "创建配置文件..."
-            cat > config/config.yaml << 'EOF'
-          app:
-            version_check_url: "https://raw.githubusercontent.com/sansan0/TrendRadar/refs/heads/master/version"
-            show_version_update: true
-
-          crawler:
-            request_interval: 1200
-            enable_crawler: true
-            use_proxy: false
-
-          report:
-            mode: "current"
-            rank_threshold: 5
-
-          notification:
-            enable_notification: true
-            webhooks:
-              feishu_url: "{{FEISHU_WEBHOOK_URL}}"
-
-          platforms:
-            - id: "wallstreetcn-hot"
-              name: "华尔街见闻"
-            - id: "cls-hot"
-              name: "财联社"
-            - id: "weibo"
-              name: "微博"
-            - id: "zhihu"
-              name: "知乎"
-            - id: "toutiao"
-              name: "今日头条"
-          EOF
-          fi
-          
-      - name: Run crawler
-        env:
-          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
-          GITHUB_ACTIONS: true
-        run: |
-          echo "开始运行热点监控..."
-          
-          # 替换飞书URL
-          if [ -f config/config.yaml ]; then
-            sed -i "s|{{FEISHU_WEBHOOK_URL}}|$FEISHU_WEBHOOK_URL|g" config/config.yaml
-          fi
-          
-          # 显示配置信息
-          echo "平台数量："
-          grep -c "id:" config/config.yaml || echo "无法统计"
-          
-          echo "关键词数量："
-          wc -l config/frequency_words.txt || echo "无法统计"
-          
-          # 运行主程序
-          echo "运行爬虫程序..."
-          python main.py
-          
-          # 检查结果
-          echo "检查运行结果..."
-          if [ -d "output" ]; then
-            echo "输出文件："
-            ls -la output/
-            
-            if [ -f "output/latest_news.txt" ]; then
-              NEWS_COUNT=$(grep -c "^\[" output/latest_news.txt 2>/dev/null || echo "0")
-              echo "爬取到 $NEWS_COUNT 条新闻"
-              
-              if [ $NEWS_COUNT -gt 0 ]; then
-                echo "新闻示例："
-                head -3 output/latest_news.txt
-              fi
-            fi
-            
-            if [ -f "output/notification_sent.txt" ]; then
-              echo "✅ 通知已发送"
-            else
-              echo "⚠️ 通知未发送（可能没有匹配新闻）"
-            fi
-          fi
-          
-      - name: Commit and push if changes
-        if: success()
-        env:
-          BRANCH_NAME: ${{ github.event.repository.default_branch }}
-        run: |
-          git config --global user.name 'GitHub Actions'
-          git config --global user.email 'actions@github.com'
-          
-          git fetch origin $BRANCH_NAME
-          git stash --include-untracked || echo "无需暂存"
-          git reset --hard origin/$BRANCH_NAME
-          git stash pop || echo "无需恢复"
-          
-          git add -A
-          
-          if git diff --quiet && git diff --staged --quiet; then
-            echo "没有更改需要提交"
-            exit 0
-          fi
-          
-          TIMESTAMP=$(TZ=Asia/Shanghai date "+%Y-%m-%d %H:%M:%S")
-          git commit -m "热点更新 $TIMESTAMP"
-          
-          # 尝试推送，最多3次
-          for i in {1..3}; do
-            if git pull --rebase origin $BRANCH_NAME && git push origin $BRANCH_NAME; then
-              echo "推送成功"
-              exit 0
-            fi
-            echo "第 $i 次推送失败，等待 $((i*5)) 秒后重试..."
-            sleep $((i*5))
-          done
-          
-          echo "推送失败"          fi
-          
-      - name: Clean frequency words file
-        run: |
-          if [ -f config/frequency_words.txt ]; then
-            echo "清理关键词文件，删除注释行..."
-            # 删除所有以#开头的注释行
-            sed -i '/^#/d' config/frequency_words.txt
-            # 删除空行
-            sed -i '/^$/d' config/frequency_words.txt
-            echo "清理后的关键词文件行数："
-            wc -l config/frequency_words.txt
-            if [ ! -s config/frequency_words.txt ]; then
-              echo "关键词文件为空，添加默认关键词"
-              echo -e "中国\n美国\n经济\n科技\n股市\n华为\n特斯拉\n人工智能\n芯片\n疫情" > config/frequency_words.txt
-            fi
-          else
-            echo "关键词文件不存在，创建示例文件"
-            mkdir -p config
-            echo -e "中国\n美国\n经济\n科技\n股市\n华为\n特斯拉\n人工智能\n芯片\n疫情" > config/frequency_words.txt
-          fi
+          python -m pip install --upgrade pip setuptools wheel
+          pip install -r requirements.txt
           
       - name: Verify required files
         run: |
-          echo "检查配置文件..."
+          echo "检查必需的配置文件..."
           if [ ! -f config/config.yaml ]; then
-            echo "创建默认配置文件..."
-            cat > config/config.yaml << 'EOF'
-          app:
-            version_check_url: "https://raw.githubusercontent.com/sansan0/TrendRadar/refs/heads/master/version"
-            show_version_update: true
-
-          crawler:
-            request_interval: 1500
-            enable_crawler: true
-            use_proxy: false
-
-          report:
-            mode: "current"
-            rank_threshold: 5
-
-          notification:
-            enable_notification: true
-            webhooks:
-              feishu_url: "{{FEISHU_WEBHOOK_URL}}"
-
-          weight:
-            rank_weight: 0.25
-            frequency_weight: 0.65
-            hotness_weight: 0.10
-
-          platforms:
-            - id: "wallstreetcn-hot"
-              name: "华尔街见闻热榜"
-            - id: "cls-hot"
-              name: "财联社热门"
-            - id: "jin10"
-              name: "金十数据"
-            - id: "weibo"
-              name: "微博热搜"
-            - id: "zhihu"
-              name: "知乎热榜"
-            - id: "toutiao"
-              name: "今日头条"
-          EOF
+            echo "错误: config/config.yaml 文件不存在"
+            exit 1
           fi
+          if [ ! -f config/frequency_words.txt ]; then
+            echo "错误: config/frequency_words.txt 文件不存在"
+            exit 1
+          fi
+          echo "配置文件检查通过"
           
       - name: Run crawler
         env:
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
           GITHUB_ACTIONS: true
-        run: |
-          echo "开始替换配置文件中的变量..."
-          
-          # 确保配置文件存在
-          if [ ! -f config/config.yaml ]; then
-            echo "配置文件不存在"
-            exit 1
-          fi
-          
-          # 备份原始配置
-          cp config/config.yaml config/config.yaml.bak
-          
-          # 替换飞书URL
-          sed -i "s|{{FEISHU_WEBHOOK_URL}}|$FEISHU_WEBHOOK_URL|g" config/config.yaml
-          
-          echo "运行爬虫..."
-          # 运行并记录详细日志
-          python main.py 2>&1 | tee run.log
-          
-          echo "爬虫运行完成，检查输出..."
-          if [ -d "output" ]; then
-            echo "输出文件列表："
-            ls -la output/
-            
-            if [ -f "output/latest_news.txt" ]; then
-              NEWS_COUNT=$(grep -c "^\[" output/latest_news.txt 2>/dev/null || echo "0")
-              echo "本次爬取到 $NEWS_COUNT 条新闻"
-            else
-              echo "没有生成最新新闻文件"
-            fi
-          else
-            echo "输出目录不存在"
-          fi
-          
+        run: python main.py
+        
       - name: Commit and push if changes
-        if: success()
         env:
           BRANCH_NAME: ${{ github.event.repository.default_branch }}
         run: |
@@ -283,6 +60,7 @@ jobs:
           git config --global user.email 'actions@github.com'
           
           git fetch origin $BRANCH_NAME
+          
           git stash --include-untracked || echo "Nothing to stash"
           git reset --hard origin/$BRANCH_NAME
           git stash pop || echo "Nothing to pop"
@@ -297,11 +75,14 @@ jobs:
           TIMESTAMP=$(TZ=Asia/Shanghai date "+%Y-%m-%d %H:%M:%S")
           git commit -m "Auto update at $TIMESTAMP"
           
-          for i in {1..3}; do
+          for i in {1..5}; do
             git pull --rebase origin $BRANCH_NAME && git push origin $BRANCH_NAME && {
-              echo "Successfully pushed"
+              echo "Successfully pushed on attempt $i"
               exit 0
             }
-            echo "Attempt $i failed, waiting $((i*5)) seconds..."
-            sleep $((i*5))
+            echo "Attempt $i failed, waiting $((i*3)) seconds..."
+            sleep $((i * 3))
           done
+          
+          echo "Failed to push after 5 attempts"
+          exit 1
