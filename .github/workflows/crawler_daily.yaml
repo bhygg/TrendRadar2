@@ -1,0 +1,72 @@
+name: '📊 热点雷达 - 日度汇总 (每日)'
+
+on:
+  schedule:
+    # 每天在 UTC 12:00 运行一次，对应北京时间 20:00 (晚上8点)
+    # 您可以通过调整UTC时间来控制推送时间，公式：北京时间 = UTC时间 + 8小时
+    - cron: '0 12 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: daily-crawler-${{ github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35 # 日度汇总需抓取全量数据，时间稍长
+
+    steps:
+      - name: '📥 检出代码'
+        uses: actions/checkout@v3
+
+      - name: '🐍 设置Python'
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: '📦 安装依赖'
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: '✅ 验证配置（日度模式）'
+        run: |
+          echo "=== 日度汇总模式 ==="
+          echo "模式: daily (汇总当日所有匹配新闻)"
+          echo "触发: 每日一次"
+          echo "目标: 全景回顾、把握趋势"
+          if [ ! -f config/config.yaml ]; then exit 1; fi
+          if [ ! -f config/frequency_words.txt ]; then exit 1; fi
+          echo "配置验证通过。"
+
+      - name: '🚀 运行爬虫 (日度模式)'
+        env:
+          GITHUB_ACTIONS: true
+          TREND_RADAR_MODE: 'daily' # 核心：强制设置为日度汇总模式
+          # 通知相关 Secrets (建议配置，推送内容多，更重要)
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          DINGTALK_WEBHOOK_URL: ${{ secrets.DINGTALK_WEBHOOK_URL }}
+          # 可根据需要添加其他通知方式的Secret
+        run: |
+          echo "开始日度全量抓取与汇总..."
+          echo "环境变量 TREND_RADAR_MODE=$TREND_RADAR_MODE"
+          python main.py 2>&1 | tee -a daily_run.log
+          echo "日度汇总执行完毕。"
+
+      - name: '📈 提交日度数据'
+        if: success()
+        env:
+          BRANCH_NAME: ${{ github.event.repository.default_branch }}
+        run: |
+          git config --global user.name 'GitHub Actions Bot'
+          git config --global user.email 'actions@github.com'
+          git fetch origin $BRANCH_NAME
+          git add -A
+          DATE_TAG=$(TZ=Asia/Shanghai date "+%Y-%m-%d")
+          git commit -m "📊 日度数据归档 [$DATE_TAG]" || echo "无新数据可提交"
+          git pull --rebase origin $BRANCH_NAME 2>/dev/null || true
+          git push origin $BRANCH_NAME
